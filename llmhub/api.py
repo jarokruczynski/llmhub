@@ -206,6 +206,45 @@ async def live(
     }
 
 
+class LiveCancelIn(BaseModel):
+    """Who to cancel: one app's calls, or everything in flight."""
+
+    app: str | None = None
+    all: bool = False
+
+    @model_validator(mode="after")
+    def _one_target(self) -> LiveCancelIn:
+        if bool(self.app) == bool(self.all):
+            raise ValueError("pass either an app name or all: true, not both and not neither")
+        return self
+
+
+def cancel_result(hub: Hub, cancelled: list[int], target: str) -> dict[str, Any]:
+    if cancelled:
+        hub.store.add_event(kind="cancel", message=f"owner cancelled {len(cancelled)} call(s): {target}")
+    return {"cancelled": cancelled, "count": len(cancelled), "ts": now_iso()}
+
+
+@router.post("/live/{call_id}/cancel")
+async def cancel_live_call(request: Request, call_id: int) -> dict[str, Any]:
+    """End one call in flight. The vendor call goes with it, slot included."""
+    require_token(request)
+    hub = hub_of(request)
+    if not hub.router.cancel_call(call_id):
+        # a stream past its own run, or a call that ended between the poll and the click
+        raise HTTPException(status_code=404, detail=f"call {call_id} is not cancellable any more")
+    return cancel_result(hub, [call_id], f"call {call_id}")
+
+
+@router.post("/live/cancel")
+async def cancel_live_calls(request: Request, payload: LiveCancelIn) -> dict[str, Any]:
+    require_token(request)
+    hub = hub_of(request)
+    app = payload.app
+    cancelled = hub.router.cancel_where(lambda record: app is None or record.app == app)
+    return cancel_result(hub, cancelled, f"app {app}" if app else "all apps")
+
+
 @router.get("/usage")
 async def usage(
     request: Request,

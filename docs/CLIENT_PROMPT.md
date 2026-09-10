@@ -186,7 +186,14 @@ Vision: send the image exactly as OpenAI's wire format, a `data:` URL inside an
   nothing.
 - `429` on `POST /jobs` with `error.code = "queue_full"` - your app already has the maximum
   number of live jobs (200 by default). Poll and finish what is queued before posting more.
-- `503` - the target app is paused (`POST /api/apps/{app}/pause` was called for it).
+- `503` - the target app is paused (`POST /api/apps/{app}/pause` was called for it), or the
+  hub owner cancelled this call from the dashboard:
+  ```json
+  {"error": {"message": "the hub owner cancelled this call from the dashboard",
+             "type": "cancelled_by_owner"}}
+  ```
+  `X-Hub-Attempts` says how far the run got. A cancelled call is not a hub failure and not a
+  retry signal: ask the owner before sending it again.
 
 Correct client reaction to a 429: do not loop-retry the same call.
 - `error.remaining_out` (or header `X-Hub-Remaining-Out`) > 0: retry once with `max_tokens`
@@ -200,6 +207,17 @@ already tried every free candidate it has.
 Quota windows are per (account, model), not global. Two different models never share a
 budget, so a batch can run them in parallel: send explicit `provider/model_id` per worker, or
 keep `auto` and split them with `X-Hub-Prefer: provider/model`.
+
+**When you stop waiting, so does the hub.** Close the connection, time out client-side, or
+hit ctrl-c and the hub notices within a second: it cancels the vendor call (an http request
+closed, a CLI agent's process group killed), frees the concurrency slot, and books the attempt
+as usage status `abandoned` - which counts as neither a success nor an error for your app.
+Nothing keeps running in the background, so there is no answer to collect later. A client-side
+timeout is therefore not a retry signal either: the call it abandoned is gone, and sending the
+same request again while the first was still going is what put dozens of dead calls in a
+vendor's queue. Work that needs longer than your own timeout belongs in a job (section 4): a
+job holds no socket, waits for a slot as long as it takes, and is the only shape of request the
+hub is willing to keep alive without someone reading it.
 
 ## 4. Async jobs (batch / overnight / quota-bound work)
 
@@ -329,6 +347,8 @@ one queueing, and gives slots back as other apps arrive (nothing running is inte
   vendor actually served each call.
 - Ban a model for your app only when the model itself produced an unusable answer, with a
   reason that names what it did. Never for a transient error, a timeout or a quota hit.
+- Do not re-send a request your own client just timed out on. The hub cancelled it when you
+  stopped listening; if the work is slower than your timeout, queue it as a job instead.
 
 ## 7. Dashboard
 

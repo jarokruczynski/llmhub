@@ -883,9 +883,31 @@ th.th-sortable[data-sort-active="true"][data-sort-dir="desc"] .sort-arrow { bord
   background: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 .live-chip-recent { color: var(--fg-dim); }
+/* queued for a slot, not talking to a vendor: dashed and dim, so calls piling up behind a
+   stuck backend never read as work in progress */
+.live-chip-waiting {
+  border-style: dashed;
+  border-color: var(--warn);
+  color: var(--fg-dim);
+}
 .live-elapsed { font-variant-numeric: tabular-nums; margin-left: 5px; }
 .live-attempt { margin-left: 4px; color: var(--warn); }
+.live-wait { margin-left: 5px; font-size: 10px; color: var(--warn); }
 .live-calls { margin-left: 5px; opacity: 0.75; }
+.live-kill {
+  margin-left: 6px;
+  padding: 0 4px;
+  font: 10px var(--mono);
+  line-height: 1.5;
+  color: var(--fg-dim);
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.live-kill:hover:enabled { color: var(--bad); border-color: var(--bad); }
+.live-kill:disabled { opacity: 0.4; cursor: default; }
+.live-kill-all { margin-left: 0; }
 
 .live-dot {
   margin-left: 5px;

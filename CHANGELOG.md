@@ -7,6 +7,46 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Owner kill switch for calls in flight: `POST api/live/{call_id}/cancel` and
+  `POST api/live/cancel` with `{"app": "..."}` or `{"all": true}`. The vendor call is cancelled
+  (an http request closed, a CLI process group killed), the concurrency slot freed, and a
+  caller still waiting gets 503 `cancelled_by_owner`. Every live chip in the dashboard has an
+  x, and an app row with more than one call in flight has a "kill N" button behind a confirm.
+- Client disconnect detection: `/v1/chat/completions` polls `request.is_disconnected()` every
+  second and cancels the run when the caller stops waiting. uvicorn does not do this on its
+  own, so an abandoned request used to hold its slot and its vendor call to the end.
+- Usage status `abandoned` for an attempt nobody is waiting for any more, with error code
+  `client_gone` or `cancelled_by_owner`, plus events of the same kinds. It is excluded from
+  every error count (`api/usage`, `api/status` model rows, app rows, `last_error`): the vendor
+  never got the chance to fail.
+- `api/live` in-flight rows carry `call_id` and `state` (`waiting` for a concurrency slot, or
+  `running` against the vendor). A waiting chip is muted and labelled in the strip and in the
+  Models tab's Apps cell.
+- Dead backend detection: three consecutive timeouts on one (account, model) park it as
+  `unavailable` with code `timeouts`; any answer resets the count.
+
+### Changed
+
+- The run budget now bounds waits and attempts, not just the move to the next candidate. A
+  semaphore acquire waits at most half of what is left of the budget and then notes the
+  attempt `busy` / `slot_wait`; a pair with `concurrency * 2` runs already queued is skipped
+  without waiting (`slot_queue_full`); the budget is re-checked after the acquire; and one
+  attempt runs under `min(remaining, vendor bound) + 15 s` before it is cancelled as
+  `attempt_timeout`. Jobs still wait unbounded - a job holds no socket.
+- The in-flight registry entry is created when the run starts rather than at the vendor call,
+  so a call queued for a slot is visible, under the model it is queued on. `in_flight_count`
+  now counts running calls only.
+- `DELETE /jobs/{id}` on a running job cancels the worker instead of only flipping the row;
+  the job ends `cancelled` with error code `cancelled_by_owner` and reports `stopped_worker`.
+
+### Fixed
+
+- Orphaned calls. Runs whose clients had timed out hours earlier queued indefinitely on a busy
+  pair's semaphore (61 in flight on the live hub, the oldest 3516 s), each eventually spending
+  a full vendor timeout on an answer nobody would read.
+
 ## [0.4.0] - 2026-09-10
 
 ### Added

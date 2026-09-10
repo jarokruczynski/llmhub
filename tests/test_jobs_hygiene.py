@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 import pytest
 
+from llmhub import gateway
 from llmhub import jobs as jobs_module
 from llmhub.gateway import CallResult
 from llmhub.router import RunResult
@@ -292,3 +293,71 @@ async def test_job_row_keeps_the_shape_older_clients_read(client: httpx.AsyncCli
     job = (await client.post("/jobs", json=body())).json()
     assert {"id", "app", "model", "state", "result", "error", "created_at"} <= set(job)
     assert (job["state"], job["result"], job["error"]) == ("queued", None, None)
+
+
+async def wait_for(predicate: Any, what: str) -> None:
+    for _ in range(300):
+        await asyncio.sleep(0.01)
+        if predicate():
+            return
+    raise AssertionError(f"timed out waiting for {what}")
+
+
+async def test_deleting_a_running_job_cancels_the_vendor_call(
+    client: httpx.AsyncClient, hub: Hub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cancelled = asyncio.Event()
+    started = asyncio.Event()
+
+    async def stuck(hub_arg: Hub, **kwargs: Any) -> RunResult:
+        started.set()
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+        return fake_result(hub_arg)
+
+    monkeypatch.setattr(jobs_module, "execute_chat", stuck)
+    job_id = (await client.post("/jobs", json=body())).json()["id"]
+    await hub.jobs.tick()
+    await wait_for(started.is_set, "the worker to start")
+    assert hub.store.job(job_id)["state"] == "running"
+
+    payload = (await client.delete(f"/jobs/{job_id}")).json()
+    assert (payload["cancelled"], payload["stopped_worker"]) == (True, True)
+    await wait_for(cancelled.is_set, "the vendor call to be cancelled")
+    await wait_for(lambda: hub.jobs.inflight == 0, "the worker to be released")
+
+    job = hub.store.job(job_id)
+    assert job["state"] == "cancelled"
+    assert json.loads(job["error"])["code"] == "cancelled_by_owner"
+
+
+async def test_the_kill_switch_ends_a_running_job(
+    client: httpx.AsyncClient, hub: Hub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Killing a job's call from the live view ends the job; a worker that died is requeued."""
+
+    async def slow_call_model(
+        hub_arg: Hub, entry: Any, request_body: Any, app: str, attempt_no: int, **kw: Any
+    ) -> Any:
+        await asyncio.sleep(30)
+        raise AssertionError("the call should have been cancelled")
+
+    monkeypatch.setattr(gateway, "call_model", slow_call_model)
+    job_id = (await client.post("/jobs", json=body())).json()["id"]
+    await hub.jobs.tick()
+    await wait_for(lambda: bool(hub.router.in_flight()), "the job to reach a vendor")
+
+    row = hub.router.in_flight()[0]
+    assert (row["kind"], row["job_id"]) == ("job", job_id)
+    assert (await client.post(f"/api/live/{row['call_id']}/cancel")).json()["count"] == 1
+    await wait_for(lambda: hub.store.job(job_id)["state"] != "running", "the job row to close")
+
+    job = hub.store.job(job_id)
+    assert job["state"] == "cancelled"
+    assert json.loads(job["error"])["code"] == "cancelled_by_owner"
+    assert hub.router.in_flight() == []
+    usage = hub.store.query("SELECT * FROM usage")[0]
+    assert (usage["status"], usage["error_code"]) == ("abandoned", "cancelled_by_owner")

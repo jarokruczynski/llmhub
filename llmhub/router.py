@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import itertools
 import logging
 import time
@@ -39,6 +38,35 @@ _CALL_IDS: Iterator[int] = itertools.count(1)
 # being closed leaves the entry with no other way out, so a read prunes anything older than a
 # call could plausibly be; the client read timeout is ten minutes.
 STALE_IN_FLIGHT_S = 3600.0
+
+# How long a run may sit in a semaphore queue: as long as its budget has left, no more. Past
+# that the pair is noted `busy` and the run moves on, because a slot that frees up later frees
+# up for a caller who stopped waiting.
+SLOT_WAIT_STATUS = "busy"
+# A bounded queue per (account, model). Waiting behind more than this many runs cannot end
+# before the budget does, so the candidate is skipped without ever joining the queue.
+SLOT_QUEUE_FACTOR = 2
+# How much of what is left of the budget one candidate may spend queueing. Never all of it:
+# the rest of the pool is worth more than a longer wait on a pair that is already busy.
+SLOT_WAIT_SHARE = 0.5
+# How far past the remaining budget one attempt may run before it is cancelled. The grace
+# covers the vendor answering just as the budget ends; past it nobody is reading the answer.
+ATTEMPT_GRACE_S = 15.0
+# Consecutive timeouts on one pair that mean the backend is dead rather than slow.
+TIMEOUT_STRIKES = 3
+# what `cli_backend` calls its own timeout; named here to keep the router import-free of it
+CLI_TIMEOUT_CODE = "cli_timeout"
+# Why a run was cancelled. `client_gone` is the disconnect watcher, the other one the owner.
+CANCEL_CLIENT_GONE = "client_gone"
+CANCEL_BY_OWNER = "cancelled_by_owner"
+# The usage status of an attempt nobody is waiting for any more. Not an error: the vendor was
+# never given the chance to fail, so it must not count against the model or the app.
+ABANDONED_STATUS = "abandoned"
+
+
+def vendor_bound_s(entry: Entry) -> float | None:
+    """The backend's own ceiling on a single call, when it declares one."""
+    return float(entry.cli_timeout_s) if entry.is_cli else None
 
 
 def quota_room(rejected: Iterable[dict[str, Any]]) -> dict[str, int | None]:
@@ -112,10 +140,12 @@ class Selection:
 
 @dataclass
 class InFlight:
-    """One call the hub is making right now, from the moment the vendor call starts.
+    """One call the hub is making right now, from the moment the run starts.
 
     `started_at` is set once per call and survives a retry or a fallback, so the elapsed time
-    a dashboard shows is the age of the caller's request, not of the current attempt.
+    a dashboard shows is the age of the caller's request, not of the current attempt. `state`
+    says which half of the call this is: `waiting` for a concurrency slot, or `running`
+    against the vendor.
     """
 
     call_id: int
@@ -129,6 +159,7 @@ class InFlight:
     started_at: float
     started_iso: str
     tokens_in_estimate: int
+    state: str = "waiting"
 
     def as_dict(self, now: float) -> dict[str, Any]:
         return {
@@ -140,6 +171,7 @@ class InFlight:
             "kind": self.kind,
             "job_id": self.job_id,
             "attempt": self.attempt,
+            "state": self.state,
             "elapsed_s": round(max(0.0, now - self.started_at), 1),
             "started_at": self.started_iso,
             "tokens_in_estimate": self.tokens_in_estimate,
@@ -167,6 +199,7 @@ class Router:
         retry_wait_max_s: float = RETRY_WAIT_MAX_S,
         not_found_ttl_s: float = NOT_FOUND_TTL_S,
         unavailable_ttl_s: float = UNAVAILABLE_TTL_S,
+        attempt_grace_s: float = ATTEMPT_GRACE_S,
     ) -> None:
         self.registry = registry
         self.store = store
@@ -177,11 +210,25 @@ class Router:
         self.retry_wait_max_s = retry_wait_max_s
         self.not_found_ttl_s = not_found_ttl_s
         self.unavailable_ttl_s = unavailable_ttl_s
+        self.attempt_grace_s = attempt_grace_s
         self._semaphores: dict[tuple[str, str], asyncio.Semaphore] = {}
         self._cooldowns: dict[tuple[str, str], datetime] = {}
         self._last_used: dict[tuple[str, str], datetime] = {}
         self._last_used_loaded = False
         self._in_flight: dict[int, InFlight] = {}
+        # the task behind each live call, so the owner can end one from the dashboard: a
+        # handler's run task for sync and stream, the job worker's task for a job
+        self._tasks: dict[int, asyncio.Task[Any]] = {}
+        self._cancel_reason: dict[int, str] = {}
+        # runs queued on a pair's semaphore right now, so the queue can be bounded and a
+        # waiting call is not counted as one the vendor is working on
+        self._waiters: dict[tuple[str, str], int] = {}
+        # consecutive timeouts per pair: a backend that answers nothing three times running is
+        # dead, not slow, and parking it is cheaper than three more caller deadlines
+        self._timeouts: dict[tuple[str, str], int] = {}
+        # jobs whose worker task was cancelled on purpose. A cancelled worker otherwise looks
+        # exactly like a worker that died, and those are requeued rather than ended.
+        self.cancelled_jobs: set[str] = set()
         # pairs this process parked as unavailable. A live row keeps the pair out of `select`,
         # so an ok on a pair in this set means the row has expired: the DELETE is worth one
         # call, and every other ok skips the database entirely.
@@ -192,11 +239,10 @@ class Router:
     # now". The semaphores know a pair is busy but not who is waiting on it, so the calls in
     # progress are kept here: in memory, one entry per `run`, no new table.
 
-    def _mark_in_flight(
+    def _register(
         self,
         call_id: int,
-        entry: Entry,
-        attempt: int,
+        entry: Entry | None,
         *,
         app: str,
         model_request: str,
@@ -204,43 +250,88 @@ class Router:
         job_id: str | None,
         est_in: int,
     ) -> InFlight:
-        record = self._in_flight.get(call_id)
-        if record is None:
-            record = InFlight(
-                call_id=call_id,
-                app=app,
-                model_key=entry.key,
-                account_id=entry.account_id,
-                requested=model_request or entry.key,
-                kind=kind,
-                job_id=job_id,
-                attempt=attempt,
-                started_at=time.monotonic(),
-                started_iso=to_iso(datetime.now(UTC)),
-                tokens_in_estimate=est_in,
-            )
-            self._in_flight[call_id] = record
-            return record
+        """The entry exists from the first line of the run, before any slot is asked for.
+
+        A call queued behind a busy pair is a call the owner should be able to see: waiting is
+        where the time goes when a backend stalls, and an entry created only at the vendor
+        call would show that time under whichever model the run happened to try last.
+        """
+        record = InFlight(
+            call_id=call_id,
+            app=app,
+            model_key=entry.key if entry is not None else model_request,
+            account_id=entry.account_id if entry is not None else "",
+            requested=model_request or (entry.key if entry is not None else ""),
+            kind=kind,
+            job_id=job_id,
+            attempt=1,
+            started_at=time.monotonic(),
+            started_iso=to_iso(datetime.now(UTC)),
+            tokens_in_estimate=est_in,
+        )
+        self._in_flight[call_id] = record
+        return record
+
+    def _retarget(self, record: InFlight, entry: Entry, attempt: int, state: str) -> None:
         record.model_key = entry.key
         record.account_id = entry.account_id
         record.attempt = attempt
-        return record
+        record.state = state
 
     def release(self, call_id: int) -> None:
         self._in_flight.pop(call_id, None)
+        self._tasks.pop(call_id, None)
+        self._cancel_reason.pop(call_id, None)
 
     def in_flight(self) -> list[dict[str, Any]]:
         now = time.monotonic()
         rows: list[dict[str, Any]] = []
         for record in sorted(self._in_flight.values(), key=lambda item: item.started_at):
             if now - record.started_at > STALE_IN_FLIGHT_S:
-                self._in_flight.pop(record.call_id, None)
+                # bounded waits and the disconnect watcher end every call long before this, so
+                # a pruned entry means one of them has a hole in it
+                log.warning(
+                    "pruning stale in-flight entry: %s on %s (%s), %.0fs old",
+                    record.app,
+                    record.model_key,
+                    record.state,
+                    now - record.started_at,
+                )
+                self.release(record.call_id)
                 continue
             rows.append(record.as_dict(now))
         return rows
 
     def in_flight_count(self, model_key: str) -> int:
-        return sum(1 for record in self._in_flight.values() if record.model_key == model_key)
+        """Calls this model is actually serving; a run queued for a slot is not one of them."""
+        return sum(
+            1
+            for record in self._in_flight.values()
+            if record.model_key == model_key and record.state == "running"
+        )
+
+    def waiting_for(self, entry: Entry) -> int:
+        return self._waiters.get((entry.account_id, entry.key), 0)
+
+    # --- cancellation ----------------------------------------------------
+    # The owner's kill switch and the disconnect watcher end a call the same way: cancel the
+    # task that owns the run. Everything else - slot, registry entry, CLI child, usage row -
+    # falls out of the cancellation handling inside `run`.
+
+    def cancel_call(self, call_id: int, reason: str = CANCEL_BY_OWNER) -> bool:
+        task = self._tasks.get(call_id)
+        if task is None or task.done():
+            return False
+        self._cancel_reason[call_id] = reason
+        record = self._in_flight.get(call_id)
+        if record is not None and record.job_id:
+            self.cancelled_jobs.add(record.job_id)
+        task.cancel()
+        return True
+
+    def cancel_where(self, predicate: Callable[[InFlight], bool], reason: str = CANCEL_BY_OWNER) -> list[int]:
+        targets = [record.call_id for record in list(self._in_flight.values()) if predicate(record)]
+        return [call_id for call_id in targets if self.cancel_call(call_id, reason)]
 
     # --- least recently used ---------------------------------------------
     # The spread strategy needs to know which (account, model) has been idle longest. The
@@ -308,6 +399,35 @@ class Router:
         )
         self._unavailable.add((entry.account_id, entry.key))
         return until
+
+    def note_timeout(self, entry: Entry) -> bool:
+        """Count a timeout on this pair and park it once they stop looking like bad luck.
+
+        A backend that never answers costs a full caller deadline per attempt, and the pool
+        keeps handing it more callers because nothing about it looks failed. Three in a row is
+        the signal; any answer at all resets the count.
+        """
+        pair = (entry.account_id, entry.key)
+        strikes = self._timeouts.get(pair, 0) + 1
+        self._timeouts[pair] = strikes
+        if strikes < TIMEOUT_STRIKES:
+            return False
+        self._timeouts.pop(pair, None)
+        classification = Classification(
+            "unavailable", "timeouts", f"{strikes} consecutive timeouts, no answer from the backend"
+        )
+        until = self.mark_unavailable(entry, classification)
+        self.store.add_event(
+            kind="unavailable",
+            message=f"{entry.key} ({entry.account_id}) parked: {strikes} consecutive timeouts",
+            model=entry.key,
+            account=entry.account_id,
+        )
+        log.info("%s parked after %d timeouts until %s", entry.key, strikes, to_iso(until))
+        return True
+
+    def clear_timeouts(self, entry: Entry) -> None:
+        self._timeouts.pop((entry.account_id, entry.key), None)
 
     def unavailable_until(self, entry: Entry, now: datetime) -> datetime | None:
         row = self.store.unavailable_until(entry.account_id, entry.key, now)
@@ -613,6 +733,40 @@ class Router:
                 account=entry.account_id,
             )
 
+        def remaining_budget() -> float | None:
+            if budget_s is None:
+                return None
+            return budget_s - (time.monotonic() - started)
+
+        def attempt_cap(entry: Entry) -> float | None:
+            """How long one attempt may run: the shorter of the caller's deadline and the
+            backend's own ceiling, plus a grace.
+
+            A CLI with a 240 s print timeout must not outlive a 90 s request budget. The grace
+            is what keeps the two from racing: a backend that stops itself gets to say why it
+            stopped, which is worth more than the second it costs.
+            """
+            remaining = remaining_budget()
+            if remaining is None:
+                return None
+            bound = vendor_bound_s(entry)
+            limit = max(0.0, remaining)
+            if bound is not None:
+                limit = min(limit, bound)
+            return limit + self.attempt_grace_s
+
+        record = self._register(
+            call_id,
+            candidates[0] if candidates else None,
+            app=app,
+            model_request=model_request,
+            kind=kind,
+            job_id=job_id,
+            est_in=est_in,
+        )
+        current: Entry | None = candidates[0] if candidates else None
+        self._tasks[call_id] = asyncio.current_task()  # type: ignore[assignment]
+
         try:
             for entry in candidates:
                 # the first candidate always runs: a budget shorter than one call would turn
@@ -620,25 +774,56 @@ class Router:
                 if attempts and over_budget():
                     budget_exhausted = True
                     break
+                current = entry
+                self._retarget(record, entry, len(attempts) + 1, "waiting")
                 semaphore = self.semaphore(entry)
-                guard = semaphore if semaphore is not None else contextlib.AsyncExitStack()
-                async with guard:  # type: ignore[union-attr]
+                queued = False
+                if semaphore is not None:
+                    queue_max = max(1, entry.concurrency or 1) * SLOT_QUEUE_FACTOR
+                    if self.waiting_for(entry) >= queue_max:
+                        # a queue this deep cannot clear inside anyone's deadline; joining it
+                        # would only spend the run's budget standing still
+                        note(entry, SLOT_WAIT_STATUS, "slot_queue_full", 0)
+                        continue
+                    queued = semaphore.locked()
+                    waited = time.monotonic()
+                    remaining = remaining_budget()
+                    if not await self._acquire_slot(
+                        semaphore, entry, None if remaining is None else remaining * SLOT_WAIT_SHARE
+                    ):
+                        note(entry, SLOT_WAIT_STATUS, "slot_wait", int((time.monotonic() - waited) * 1000))
+                        continue
+                try:
+                    # a run that actually queued for this slot may have lost its deadline while
+                    # standing in line: hand the slot on rather than call for nobody. A slot
+                    # that was free is not re-checked - the first candidate always runs.
+                    if queued and over_budget():
+                        budget_exhausted = True
+                        break
                     for index in range(len(self.retry_delays) + 1):
                         self.touch(entry)
-                        # inside the guard, right before the vendor call: the entry exists for
-                        # exactly as long as the hub is waiting on this candidate
-                        self._mark_in_flight(
-                            call_id,
-                            entry,
-                            len(attempts) + 1,
-                            app=app,
-                            model_request=model_request,
-                            kind=kind,
-                            job_id=job_id,
-                            est_in=est_in,
-                        )
+                        self._retarget(record, entry, len(attempts) + 1, "running")
+                        attempt_started = time.monotonic()
                         try:
-                            result = await call(entry, len(attempts) + 1)
+                            cap = attempt_cap(entry)
+                            if cap is None:
+                                result = await call(entry, len(attempts) + 1)
+                            else:
+                                result = await asyncio.wait_for(call(entry, len(attempts) + 1), timeout=cap)
+                        except TimeoutError:
+                            # the vendor call is cancelled by now: an http request is closed, a
+                            # CLI child killed. Nothing is left to wait for and nothing is left
+                            # of the budget either, so the run stops here.
+                            note(
+                                entry,
+                                "retry",
+                                "attempt_timeout",
+                                int((time.monotonic() - attempt_started) * 1000),
+                            )
+                            self.set_cooldown(entry)
+                            self.note_timeout(entry)
+                            budget_exhausted = True
+                            break
                         except UpstreamError as exc:
                             last_error = exc
                             failure = exc.classification.kind
@@ -711,21 +896,116 @@ class Router:
                                 give_up(entry, failure, exc.classification.code)
                                 break
                             if failure == "error":
+                                if exc.classification.code == CLI_TIMEOUT_CODE:
+                                    # the backend's own timeout rather than ours: the same fact
+                                    # about the pair, so it counts towards the same strikes
+                                    self.note_timeout(entry)
                                 error_providers.add(entry.provider_name)
                             give_up(entry, failure, exc.classification.code)
                             break
                         else:
                             note(entry, "ok", None, int(getattr(result, "latency_ms", 0) or 0))
+                            self.clear_timeouts(entry)
                             if (entry.account_id, entry.key) in self._unavailable:
                                 self.clear_unavailable(entry.key, entry.account_id)
                             hold = kind == "stream"
                             return RunResult(entry=entry, result=result, attempts=attempts, call_id=call_id)
+                finally:
+                    if semaphore is not None:
+                        semaphore.release()
                 if budget_exhausted:
                     break
                 if len(error_providers) >= ERROR_PROVIDERS_STOP:
                     log.info("stopping run: %d providers rejected the request itself", len(error_providers))
                     break
             raise AllCandidatesFailed(attempts, last_error, budget_exhausted=budget_exhausted)
+        except asyncio.CancelledError:
+            self._note_abandoned(
+                call_id,
+                current,
+                app=app,
+                kind=kind,
+                attempt=len(attempts) + 1,
+                elapsed_s=time.monotonic() - started,
+                on_attempt=on_attempt,
+                attempts=attempts,
+            )
+            raise
         finally:
+            self._tasks.pop(call_id, None)
+            self._cancel_reason.pop(call_id, None)
             if not hold:
                 self._in_flight.pop(call_id, None)
+
+    def _note_abandoned(
+        self,
+        call_id: int,
+        entry: Entry | None,
+        *,
+        app: str,
+        kind: str,
+        attempt: int,
+        elapsed_s: float,
+        on_attempt: Callable[[dict[str, Any]], None] | None,
+        attempts: list[dict[str, Any]],
+    ) -> None:
+        """Book the attempt nobody is waiting for any more.
+
+        No cooldown and no fallback event: the candidate did nothing wrong, and parking it
+        would punish the pool for a client that walked away. The usage row records where the
+        run was when it was cut off - the vendor may well have counted the call - under a
+        status every error sum skips.
+        """
+        reason = self._cancel_reason.get(call_id, CANCEL_CLIENT_GONE)
+        if entry is None:
+            return
+        record = {
+            "model": entry.key,
+            "account": entry.account_id,
+            "status": ABANDONED_STATUS,
+            "error_code": reason,
+            "latency_ms": int(elapsed_s * 1000),
+            "attempt": attempt,
+        }
+        attempts.append(record)
+        if on_attempt:
+            on_attempt(record)
+        self.store.start_usage(
+            app=app,
+            provider=entry.provider_name,
+            account=entry.account_id,
+            model=entry.key,
+            status=ABANDONED_STATUS,
+            latency_ms=int(elapsed_s * 1000),
+            attempt=attempt,
+            error_code=reason,
+            stream=kind == "stream",
+        )
+        self.store.add_event(
+            kind="cancel" if reason == CANCEL_BY_OWNER else CANCEL_CLIENT_GONE,
+            message=f"{app} {reason} on {entry.key} ({entry.account_id}) after {elapsed_s:.1f}s",
+            app=app,
+            model=entry.key,
+            account=entry.account_id,
+        )
+
+    async def _acquire_slot(self, semaphore: asyncio.Semaphore, entry: Entry, timeout: float | None) -> bool:
+        """Wait for one of the pair's slots, but never past the caller's own deadline."""
+        pair = (entry.account_id, entry.key)
+        self._waiters[pair] = self._waiters.get(pair, 0) + 1
+        try:
+            if timeout is None:
+                await semaphore.acquire()
+                return True
+            if timeout <= 0:
+                return False
+            await asyncio.wait_for(semaphore.acquire(), timeout=timeout)
+            return True
+        except TimeoutError:
+            return False
+        finally:
+            left = self._waiters.get(pair, 1) - 1
+            if left > 0:
+                self._waiters[pair] = left
+            else:
+                self._waiters.pop(pair, None)

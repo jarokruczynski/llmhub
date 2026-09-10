@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -16,6 +18,9 @@ from .auth import require_token
 from .config import CLI_KIND, Entry
 from .quota import estimate_request_cost
 from .router import (
+    ABANDONED_STATUS,
+    CANCEL_BY_OWNER,
+    CANCEL_CLIENT_GONE,
     AllCandidatesFailed,
     NoCandidatesError,
     RunResult,
@@ -571,6 +576,7 @@ async def execute_chat(
     min_context: int | None = None,
     avoid: list[str] | None = None,
     max_latency_ms: int | None = None,
+    on_attempt: Callable[[dict[str, Any]], None] | None = None,
 ) -> RunResult:
     est_in, est_out = estimate_request_cost(body)
     selection = hub.router.select(
@@ -606,6 +612,71 @@ async def execute_chat(
         job_id=job_id,
         est_in=est_in,
         budget_s=budget_s,
+        on_attempt=on_attempt,
+    )
+
+
+# How often the handler asks whether the socket is still there. uvicorn does not cancel a
+# handler when the client goes away, so without this poll an abandoned request keeps a slot and
+# a vendor call to the end - and behind it queues every other caller of the same pair.
+DISCONNECT_POLL_S = 1.0
+
+
+async def watch_client(request: Request, task: asyncio.Task[Any]) -> None:
+    """Cancel the run as soon as the socket behind it is gone."""
+    while not task.done():
+        if await request.is_disconnected():
+            task.cancel()
+            return
+        await asyncio.sleep(DISCONNECT_POLL_S)
+
+
+async def execute_watched(hub: Hub, request: Request, **kwargs: Any) -> RunResult:
+    """`execute_chat` as a task, with the disconnect watcher alongside it."""
+    task = asyncio.create_task(execute_chat(hub, **kwargs))
+    watcher = asyncio.create_task(watch_client(request, task))
+    try:
+        return await task
+    finally:
+        watcher.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await watcher
+        if not task.done():
+            # the handler itself was cancelled: the run must not outlive the request
+            task.cancel()
+
+
+def cancel_reason(attempts: list[dict[str, Any]]) -> str | None:
+    """Why the run was cancelled, from the row the router booked before it re-raised.
+
+    Nothing there means the cancellation was not the router's to explain - the handler is
+    being torn down for some other reason - and the CancelledError belongs upstream.
+    """
+    if attempts and attempts[-1]["status"] == ABANDONED_STATUS:
+        return str(attempts[-1]["error_code"] or CANCEL_CLIENT_GONE)
+    return None
+
+
+def cancelled_response(reason: str, attempts: list[dict[str, Any]]) -> Response:
+    """What a cancelled run answers with - to a client that may not be there any more."""
+    headers = {"X-Hub-Attempts": attempts_header(attempts)}
+    if reason == CANCEL_CLIENT_GONE:
+        # the socket is already gone, so this body reaches nobody; it exists so the handler
+        # returns a response instead of letting a CancelledError look like a crash
+        return JSONResponse(
+            status_code=499,
+            content={"error": {"message": "client disconnected", "type": CANCEL_CLIENT_GONE}},
+            headers=headers,
+        )
+    return JSONResponse(
+        status_code=503,
+        content={
+            "error": {
+                "message": "the hub owner cancelled this call from the dashboard",
+                "type": CANCEL_BY_OWNER,
+            }
+        },
+        headers=headers,
     )
 
 
@@ -650,9 +721,11 @@ async def chat_completions(request: Request) -> Response:
     allow_paid = request.headers.get("x-hub-allow-paid") == "1"
     stream = bool(body.get("stream"))
 
+    attempts: list[dict[str, Any]] = []
     try:
-        result = await execute_chat(
+        result = await execute_watched(
             hub,
+            request,
             body=body,
             app=app,
             model_request=model_request,
@@ -663,7 +736,15 @@ async def chat_completions(request: Request) -> Response:
             min_context=min_context,
             avoid=avoid,
             max_latency_ms=max_latency_ms,
+            on_attempt=attempts.append,
         )
+    except asyncio.CancelledError:
+        # the run task was cancelled, not this handler: the router has already released the
+        # slot, killed the vendor call and written the abandoned row
+        reason = cancel_reason(attempts)
+        if reason is None:
+            raise
+        return cancelled_response(reason, attempts)
     except UnknownModelError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except NoCandidatesError as exc:

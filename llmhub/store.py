@@ -508,13 +508,19 @@ class Store:
         return row["ts"] if row and row["ts"] else None
 
     def model_stats(self, account: str, model: str) -> dict[str, Any]:
+        """Last ok, last failure and average latency for one pair.
+
+        `abandoned` rows are neither: the caller stopped waiting or the owner killed the call,
+        so the vendor never got the chance to succeed or fail. Every error count in this file
+        skips them for the same reason - a model must not look broken because a client left.
+        """
         ok_row = self.query_one(
             "SELECT ts FROM usage WHERE account = ? AND model = ? AND status = 'ok' ORDER BY id DESC LIMIT 1",
             (account, model),
         )
         err_row = self.query_one(
             "SELECT ts, status, error_code FROM usage WHERE account = ? AND model = ? "
-            "AND status != 'ok' ORDER BY id DESC LIMIT 1",
+            "AND status NOT IN ('ok', 'abandoned') ORDER BY id DESC LIMIT 1",
             (account, model),
         )
         lat_row = self.query_one(
@@ -777,7 +783,7 @@ class Store:
                    COUNT(*) AS requests,
                    COALESCE(SUM(in_tokens), 0) AS in_tokens,
                    COALESCE(SUM(out_tokens), 0) AS out_tokens,
-                   SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS errors,
+                   SUM(CASE WHEN status NOT IN ('ok', 'abandoned') THEN 1 ELSE 0 END) AS errors,
                    MAX(ts) AS last_used_at
             FROM usage WHERE ts >= ? GROUP BY account, model
             """,
@@ -868,7 +874,7 @@ class Store:
                    COALESCE(SUM(in_tokens), 0) AS in_tokens,
                    COALESCE(SUM(out_tokens), 0) AS out_tokens,
                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                   SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS errors,
+                   SUM(CASE WHEN status NOT IN ('ok', 'abandoned') THEN 1 ELSE 0 END) AS errors,
                    MAX(ts) AS last_seen
             FROM usage GROUP BY app
             """
@@ -1314,7 +1320,7 @@ class Store:
                    COALESCE(SUM(in_tokens), 0) AS in_tokens,
                    COALESCE(SUM(out_tokens), 0) AS out_tokens,
                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                   SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS errors
+                   SUM(CASE WHEN status NOT IN ('ok', 'abandoned') THEN 1 ELSE 0 END) AS errors
             FROM usage{where}
             GROUP BY bucket ORDER BY bucket
             """,
@@ -1341,7 +1347,7 @@ class Store:
                    COALESCE(SUM(in_tokens), 0) AS in_tokens,
                    COALESCE(SUM(out_tokens), 0) AS out_tokens,
                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
-                   SUM(CASE WHEN status != 'ok' THEN 1 ELSE 0 END) AS errors
+                   SUM(CASE WHEN status NOT IN ('ok', 'abandoned') THEN 1 ELSE 0 END) AS errors
             FROM usage{where}
             GROUP BY bucket ORDER BY bucket
             """,

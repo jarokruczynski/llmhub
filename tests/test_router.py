@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import asyncio
+import time
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import pytest
 import yaml
@@ -959,3 +962,253 @@ def test_forgiving_a_model_clears_its_parked_rows(hub: Hub) -> None:
     assert hub.router.clear_unavailable("alpha/m1") == 1
     assert hub.store.unavailable_all() == {}
     assert hub.router._unavailable == set()
+
+
+# --- bounded waits, cancellation, dead backends -------------------------------------------
+
+
+def with_concurrency(hub: Hub, key: str, account: str, limit: int) -> Entry:
+    entry = entry_of(hub, key, account)
+    object.__setattr__(entry.model, "concurrency", limit)
+    return entry
+
+
+async def test_a_slot_wait_ends_with_the_budget_and_the_run_moves_on(hub: Hub) -> None:
+    first = with_concurrency(hub, "alpha/m1", "alpha-1", 1)
+    second = entry_of(hub, "alpha/m1", "alpha-2")
+    semaphore = hub.router.semaphore(first)
+    assert semaphore is not None
+    await semaphore.acquire()
+    seen: list[str] = []
+
+    async def call(entry: Entry, attempt_no: int) -> str:
+        seen.append(entry.account_id)
+        return "served"
+
+    result = await hub.router.run([first, second], call, budget_s=0.15)
+    assert seen == ["alpha-2"]
+    assert result.entry.account_id == "alpha-2"
+    assert [(item["status"], item["error_code"]) for item in result.attempts][0] == ("busy", "slot_wait")
+    semaphore.release()
+
+
+async def test_a_full_slot_queue_is_skipped_without_waiting(hub: Hub) -> None:
+    first = with_concurrency(hub, "alpha/m1", "alpha-1", 1)
+    second = entry_of(hub, "alpha/m1", "alpha-2")
+    semaphore = hub.router.semaphore(first)
+    assert semaphore is not None
+    await semaphore.acquire()
+    # two waiters already queued on one slot: a third would be answering nobody
+    hub.router._waiters[(first.account_id, first.key)] = 2
+
+    async def call(entry: Entry, attempt_no: int) -> str:
+        return "served"
+
+    started = time.monotonic()
+    result = await hub.router.run([first, second], call, budget_s=30.0)
+    assert time.monotonic() - started < 0.5
+    assert result.entry.account_id == "alpha-2"
+    assert result.attempts[0]["error_code"] == "slot_queue_full"
+    semaphore.release()
+
+
+class HeldSlot:
+    """A semaphore that looked busy and was free by the time the run asked for it."""
+
+    def __init__(self) -> None:
+        self.released = 0
+
+    def locked(self) -> bool:
+        return True
+
+    async def acquire(self) -> bool:
+        return True
+
+    def release(self) -> None:
+        self.released += 1
+
+
+async def test_a_budget_lost_while_queued_hands_the_slot_back(
+    hub: Hub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The acquire wins the race against its own deadline: the run still stops.
+
+    The wait is bounded by the budget, so this is the boundary case - the slot comes free at
+    the instant the caller's deadline passes. Calling anyway would spend a slot on nobody.
+    """
+    entry = with_concurrency(hub, "alpha/m1", "alpha-1", 1)
+    slot = HeldSlot()
+    hub.router._semaphores[(entry.account_id, entry.key)] = slot  # type: ignore[assignment]
+    called = False
+
+    async def slow_acquire(semaphore: Any, candidate: Entry, timeout: float | None) -> bool:
+        await asyncio.sleep(0.1)
+        return True
+
+    monkeypatch.setattr(hub.router, "_acquire_slot", slow_acquire)
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        nonlocal called
+        called = True
+        return "served"
+
+    with pytest.raises(AllCandidatesFailed) as excinfo:
+        await hub.router.run([entry], call, budget_s=0.05)
+    assert called is False
+    assert excinfo.value.budget_exhausted is True
+    assert slot.released == 1
+    assert hub.router.in_flight() == []
+
+
+async def test_an_attempt_past_the_budget_is_cancelled_and_the_run_stops(hub: Hub) -> None:
+    hub.router.attempt_grace_s = 0.05
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    cancelled = False
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        nonlocal cancelled
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        return "served"
+
+    with pytest.raises(AllCandidatesFailed) as excinfo:
+        await hub.router.run([entry, entry_of(hub, "alpha/m1", "alpha-2")], call, budget_s=0.05)
+    assert cancelled is True
+    assert [(item["status"], item["error_code"]) for item in excinfo.value.attempts] == [
+        ("retry", "attempt_timeout")
+    ]
+    assert excinfo.value.budget_exhausted is True
+    assert hub.router.in_cooldown(entry, datetime.now(UTC)) is not None
+    assert hub.router.in_flight() == []
+
+
+async def test_no_budget_means_no_attempt_cap(hub: Hub) -> None:
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        await asyncio.sleep(0.05)
+        return "served"
+
+    result = await hub.router.run([entry], call, budget_s=None)
+    assert result.result == "served"
+
+
+async def test_the_registry_shows_waiting_then_running(hub: Hub) -> None:
+    entry = with_concurrency(hub, "alpha/m1", "alpha-1", 1)
+    semaphore = hub.router.semaphore(entry)
+    assert semaphore is not None
+    await semaphore.acquire()
+    running = asyncio.Event()
+    finish = asyncio.Event()
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        running.set()
+        await finish.wait()
+        return "served"
+
+    task = asyncio.create_task(hub.router.run([entry], call, app="my-app", budget_s=None))
+    while hub.router.waiting_for(entry) != 1:
+        await asyncio.sleep(0)
+    rows = hub.router.in_flight()
+    assert [(row["app"], row["model"], row["state"]) for row in rows] == [("my-app", "alpha/m1", "waiting")]
+    # a queued call is not one the model is serving
+    assert hub.router.in_flight_count("alpha/m1") == 0
+
+    semaphore.release()
+    await running.wait()
+    assert [row["state"] for row in hub.router.in_flight()] == ["running"]
+    assert hub.router.in_flight_count("alpha/m1") == 1
+    assert hub.router.waiting_for(entry) == 0
+    finish.set()
+    await task
+    assert hub.router.in_flight() == []
+
+
+async def test_cancelling_a_run_books_it_as_abandoned(hub: Hub) -> None:
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    started = asyncio.Event()
+    cancelled = False
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        nonlocal cancelled
+        started.set()
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
+        return "served"
+
+    task = asyncio.create_task(hub.router.run([entry], call, app="my-app", budget_s=None))
+    await started.wait()
+    call_id = hub.router.in_flight()[0]["call_id"]
+    assert hub.router.cancel_call(call_id) is True
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert cancelled is True
+    assert hub.router.in_flight() == []
+    row = hub.store.query("SELECT * FROM usage")[0]
+    assert (row["status"], row["error_code"], row["app"]) == ("abandoned", "cancelled_by_owner", "my-app")
+    assert [event["kind"] for event in hub.store.events(10)] == ["cancel"]
+
+
+async def test_cancel_where_takes_one_app_at_a_time(hub: Hub) -> None:
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    running = asyncio.Event()
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        running.set()
+        await asyncio.sleep(5)
+        return "served"
+
+    mine = asyncio.create_task(hub.router.run([entry], call, app="my-app", budget_s=None))
+    theirs = asyncio.create_task(hub.router.run([entry], call, app="batch-ocr", budget_s=None))
+    while len(hub.router.in_flight()) < 2:
+        await asyncio.sleep(0)
+    await running.wait()
+
+    cancelled = hub.router.cancel_where(lambda record: record.app == "my-app")
+    assert len(cancelled) == 1
+    with pytest.raises(asyncio.CancelledError):
+        await mine
+    assert [row["app"] for row in hub.router.in_flight()] == ["batch-ocr"]
+    theirs.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await theirs
+
+
+async def test_three_timeouts_park_the_pair(hub: Hub) -> None:
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        raise UpstreamError(Classification("error", "cli_timeout", "timed out after 240s"), None)
+
+    for _ in range(3):
+        with pytest.raises(AllCandidatesFailed):
+            await hub.router.run([entry], call, budget_s=None)
+
+    row = hub.store.unavailable_until("alpha-1", "alpha/m1", datetime.now(UTC))
+    assert row is not None
+    assert (row["kind"], row["code"]) == ("unavailable", "timeouts")
+    assert "unavailable" in [event["kind"] for event in hub.store.events(20)]
+
+
+async def test_an_answer_resets_the_timeout_strikes(hub: Hub) -> None:
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    answers: list[bool] = [False, False, True, False, False]
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        if answers.pop(0):
+            return "served"
+        raise UpstreamError(Classification("error", "cli_timeout", "timed out"), None)
+
+    for _ in range(5):
+        try:
+            await hub.router.run([entry], call, budget_s=None)
+        except AllCandidatesFailed:
+            pass
+    assert hub.store.unavailable_until("alpha-1", "alpha/m1", datetime.now(UTC)) is None

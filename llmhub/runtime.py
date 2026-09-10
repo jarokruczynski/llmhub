@@ -67,6 +67,7 @@ class Hub:
             retry_wait_max_s=self.router.retry_wait_max_s,
             not_found_ttl_s=self.router.not_found_ttl_s,
             unavailable_ttl_s=self.router.unavailable_ttl_s,
+            attempt_grace_s=self.router.attempt_grace_s,
         )
         router._semaphores = self.router._semaphores
         router._cooldowns = self.router._cooldowns
@@ -74,8 +75,14 @@ class Hub:
         router._unavailable = self.router._unavailable
         router._last_used = self.router._last_used
         router._last_used_loaded = self.router._last_used_loaded
-        # a stream registered on the old router is released through the new one
+        # a stream registered on the old router is released through the new one, and the kill
+        # switch has to keep reaching a call that started before the reload
         router._in_flight = self.router._in_flight
+        router._tasks = self.router._tasks
+        router._cancel_reason = self.router._cancel_reason
+        router._waiters = self.router._waiters
+        router._timeouts = self.router._timeouts
+        router.cancelled_jobs = self.router.cancelled_jobs
         self.registry = registry
         self.router = router
         log.info(

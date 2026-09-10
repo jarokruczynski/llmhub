@@ -444,7 +444,9 @@ falls back to a built-in tag stripper.
 - **Live strip** (above the tabs, on every tab) - one row per app with a call running or
   recent activity: a highlighted chip per in-flight call with its elapsed time ticking, muted
   chips with call counts for what the app used in the last 15 minutes. Polls every 2 s while
-  the tab is visible, 10 s when nothing is in flight.
+  the tab is visible, 10 s when nothing is in flight. A call still queued for a concurrency
+  slot is shown muted and labelled `waiting`; every chip has an x that cancels the call
+  (vendor call included), and an app with several calls in flight gets a "kill N" button.
 
 | Models - filters and sortable headers | Usage |
 | --- | --- |
@@ -469,6 +471,10 @@ falls back to a built-in tag stripper.
 | Live strip and the Models apps column | Live strip on a phone |
 | --- | --- |
 | ![Live strip above the tabs with in-flight and recent chips](docs/ui/live-strip-1440.png) | ![Live strip at phone width](docs/ui/live-strip-390.png) |
+
+| Waiting chips and the kill switch | The same at phone width |
+| --- | --- |
+| ![Live strip with a queued call, an x on every chip and a kill button per app](docs/ui/live-kill-1440.png) | ![Waiting chip and kill buttons at phone width](docs/ui/live-kill-390.png) |
 
 | Events - filtered | Mobile (Models tab) |
 | --- | --- |

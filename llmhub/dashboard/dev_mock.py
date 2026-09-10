@@ -4,6 +4,7 @@ import argparse
 import random
 import re
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -979,11 +980,13 @@ DISCOVERED_BY_PROVIDER: dict[str, list[str]] = {
     "ollama": ["qwen3:30b-a3b-instruct-2507-q4_K_M", "gemma3:27b", "llama3.2:3b"],
 }
 
-# The live view: three apps busy, four calls in flight. zai/glm-4.5-flash has two callers at
+# The live view: three apps busy, five calls in flight. zai/glm-4.5-flash has two callers at
 # once (my-app and hub-cli), so the Models table's Apps cell has something to show two chips
 # for; the dashscope job is already on its second candidate after a fallback, for the attempt
-# marker. Elapsed seconds are counted from process start so the chips tick. Every (account,
-# model) pair here must exist in _models() or the Models table has nothing to join it against.
+# marker; batch-ocr holds one running call with a second queued behind it, which is what the
+# muted "waiting" chip and the kill switch need to show. Elapsed seconds are counted from
+# process start so the chips tick. Every (account, model) pair here must exist in _models() or
+# the Models table has nothing to join it against.
 LIVE_BOOT = now()
 LIVE_WINDOW_MIN = 15
 LIVE_CALLS: list[dict[str, Any]] = [
@@ -995,6 +998,8 @@ LIVE_CALLS: list[dict[str, Any]] = [
         "base_s": 6.0,
         "attempt": 1,
         "job_id": None,
+        "call_id": 101,
+        "state": "running",
     },
     {
         "app": "hub-cli",
@@ -1004,6 +1009,8 @@ LIVE_CALLS: list[dict[str, Any]] = [
         "base_s": 1.5,
         "attempt": 1,
         "job_id": None,
+        "call_id": 102,
+        "state": "running",
     },
     {
         "app": "my-app",
@@ -1013,6 +1020,8 @@ LIVE_CALLS: list[dict[str, Any]] = [
         "base_s": 41.0,
         "attempt": 2,
         "job_id": "job_9f21c0a4b7d1",
+        "call_id": 103,
+        "state": "running",
     },
     {
         "app": "batch-ocr",
@@ -1022,6 +1031,19 @@ LIVE_CALLS: list[dict[str, Any]] = [
         "base_s": 2.0,
         "attempt": 1,
         "job_id": None,
+        "call_id": 104,
+        "state": "running",
+    },
+    {
+        "app": "batch-ocr",
+        "model": "explabs/claude-fable-5.1",
+        "account": "explabs-main",
+        "kind": "sync",
+        "base_s": 12.0,
+        "attempt": 1,
+        "job_id": None,
+        "call_id": 105,
+        "state": "waiting",
     },
 ]
 LIVE_RECENT: dict[str, list[dict[str, Any]]] = {
@@ -1046,6 +1068,8 @@ def _live_apps() -> list[dict[str, Any]]:
     for call in LIVE_CALLS:
         rows[call["app"]]["in_flight"].append(
             {
+                "call_id": call["call_id"],
+                "state": call["state"],
                 "model": call["model"],
                 "account": call["account"],
                 "kind": call["kind"],
@@ -1062,6 +1086,13 @@ def _live_apps() -> list[dict[str, Any]]:
             row["app"],
         ),
     )
+
+
+def _drop_live_calls(match: Callable[[dict[str, Any]], bool]) -> list[int]:
+    """The mock's kill switch: a cancelled call simply leaves the in-flight list."""
+    gone = [call["call_id"] for call in LIVE_CALLS if match(call)]
+    LIVE_CALLS[:] = [call for call in LIVE_CALLS if call["call_id"] not in gone]
+    return gone
 
 
 def _live_model_columns() -> tuple[dict[str, list[str]], dict[str, int]]:
@@ -1693,6 +1724,22 @@ def create_hub_app() -> FastAPI:
             "apps": rows,
             "in_flight_total": sum(len(row["in_flight"]) for row in rows),
         }
+
+    @app.post("/api/live/{call_id}/cancel")
+    def cancel_live_call(request: Request, call_id: int) -> dict[str, Any]:
+        _require_token(request)
+        if not _drop_live_calls(lambda call: call["call_id"] == call_id):
+            raise HTTPException(status_code=404, detail=f"call {call_id} is not cancellable any more")
+        return {"cancelled": [call_id], "count": 1, "ts": iso(now())}
+
+    @app.post("/api/live/cancel")
+    def cancel_live_calls(request: Request, payload: dict[str, Any]) -> dict[str, Any]:
+        _require_token(request)
+        app_name = payload.get("app")
+        if not app_name and not payload.get("all"):
+            raise HTTPException(status_code=422, detail="pass an app name or all: true")
+        cancelled = _drop_live_calls(lambda call: not app_name or call["app"] == app_name)
+        return {"cancelled": cancelled, "count": len(cancelled), "ts": iso(now())}
 
     @app.get("/api/usage")
     def usage(since: str | None = None, group_by: str = "app", app_name: str | None = None) -> dict[str, Any]:

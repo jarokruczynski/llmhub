@@ -110,7 +110,13 @@ async def test_job_listing_and_cancel(client: httpx.AsyncClient) -> None:
     assert [job["id"] for job in listing.json()["jobs"]] == [job_id]
 
     cancelled = await client.delete(f"/jobs/{job_id}")
-    assert cancelled.json() == {"id": job_id, "state": "cancelled", "cancelled": True}
+    assert cancelled.json() == {
+        "id": job_id,
+        "state": "cancelled",
+        "cancelled": True,
+        # queued, so there was no worker to stop
+        "stopped_worker": False,
+    }
     assert (await client.get(f"/jobs/{job_id}")).json()["state"] == "cancelled"
 
     api_view = await client.get("/api/jobs", params={"state": "cancelled"})

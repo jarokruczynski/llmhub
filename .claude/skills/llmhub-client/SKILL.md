@@ -108,7 +108,10 @@ encoding.
   per-candidate status and error codes, `error.last` with the final vendor body, and
   `error.budget_exhausted: true` when the hub stopped at its 90 s budget with candidates
   still untried. Retry once after `Retry-After: 30`, then go async.
-- `503`: the calling app is paused on the hub.
+- `503`: the calling app is paused on the hub, or the owner cancelled the call
+  (`error.type: "cancelled_by_owner"`). Note that when you stop waiting the hub cancels the
+  vendor call within a second and books it as `abandoned`, so a client-side timeout is not a
+  retry signal - queue work slower than your timeout as a job instead.
 
 ## 4. Batch / overnight / quota-bound work: use jobs, not a retry loop
 

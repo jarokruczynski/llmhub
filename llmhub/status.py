@@ -176,6 +176,10 @@ def live_rows(
     for call in hub.router.in_flight():
         slot(str(call["app"]))["in_flight"].append(
             {
+                # the id is what the kill switch addresses, the state what the chip shows:
+                # a call queued for a slot is not one the model is working on
+                "call_id": call["call_id"],
+                "state": call["state"],
                 "model": call["model"],
                 "account": call["account"],
                 "kind": call["kind"],

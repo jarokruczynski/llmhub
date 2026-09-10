@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 import httpx
+import pytest
 
+from llmhub import gateway
 from llmhub.runtime import Hub
 from llmhub.store import to_iso
 
@@ -356,9 +360,10 @@ async def test_live_reports_in_flight_and_recent_per_app(client: httpx.AsyncClie
     _usage_row(hub, "my-app", "alpha/m1", "alpha-2", 60)
     _usage_row(hub, "batch-ocr", "beta/m2", "beta-1", 5)
     entry = entry_of(hub, "beta/m2", "beta-1")
-    hub.router._mark_in_flight(
-        1, entry, 2, app="batch-ocr", model_request="vision", kind="stream", job_id=None, est_in=900
+    record = hub.router._register(
+        1, entry, app="batch-ocr", model_request="vision", kind="stream", job_id=None, est_in=900
     )
+    hub.router._retarget(record, entry, 2, "running")
 
     payload = (await client.get("/api/live")).json()
     assert payload["generated_at"]
@@ -370,7 +375,8 @@ async def test_live_reports_in_flight_and_recent_per_app(client: httpx.AsyncClie
     # the app with a call in flight leads the strip
     assert payload["apps"][0]["app"] == "batch-ocr"
     call = apps["batch-ocr"]["in_flight"][0]
-    assert set(call) == {"model", "account", "kind", "elapsed_s", "attempt", "job_id"}
+    assert set(call) == {"call_id", "state", "model", "account", "kind", "elapsed_s", "attempt", "job_id"}
+    assert (call["call_id"], call["state"]) == (1, "running")
     assert (call["model"], call["account"], call["kind"], call["attempt"]) == (
         "beta/m2",
         "beta-1",
@@ -410,9 +416,10 @@ async def test_status_models_carry_recent_apps_and_in_flight(client: httpx.Async
     _usage_row(hub, "batch-ocr", "alpha/m1", "alpha-1", 10)
     _usage_row(hub, "scout", "alpha/m1", "alpha-1", 10, ts=to_iso(now - timedelta(hours=2)))
     entry = entry_of(hub, "alpha/m1", "alpha-1")
-    hub.router._mark_in_flight(
-        2, entry, 1, app="my-app", model_request="auto", kind="sync", job_id=None, est_in=0
+    record = hub.router._register(
+        2, entry, app="my-app", model_request="auto", kind="sync", job_id=None, est_in=0
     )
+    hub.router._retarget(record, entry, 1, "running")
 
     models = (await client.get("/api/status")).json()["models"]
     row = next(item for item in models if item["key"] == "alpha/m1" and item["account"] == "alpha-1")
@@ -424,3 +431,94 @@ async def test_status_models_carry_recent_apps_and_in_flight(client: httpx.Async
     assert idle["in_flight"] == 0
 
     hub.router.release(2)
+
+
+# --- the owner's kill switch ---------------------------------------------------------------
+
+
+async def slow_call_model(hub: Hub, entry: Any, body: Any, app: str, attempt_no: int, **kw: Any) -> Any:
+    await asyncio.sleep(5)
+    raise AssertionError("the call should have been cancelled")
+
+
+async def start_call(client: httpx.AsyncClient, hub: Hub, app: str) -> asyncio.Task[httpx.Response]:
+    """One chat request left hanging on a vendor that never answers."""
+    body = {"model": "alpha/m1", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 64}
+    task = asyncio.create_task(client.post("/v1/chat/completions", json=body, headers={"X-Hub-App": app}))
+    seen = len(hub.router.in_flight())
+    for _ in range(500):
+        await asyncio.sleep(0.002)
+        if len(hub.router.in_flight()) > seen:
+            return task
+    raise AssertionError(f"the call never reached the router: {task}")
+
+
+async def test_cancelling_one_live_call(
+    client: httpx.AsyncClient, hub: Hub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gateway, "call_model", slow_call_model)
+    call = await start_call(client, hub, "my-app")
+    call_id = hub.router.in_flight()[0]["call_id"]
+
+    payload = (await client.post(f"/api/live/{call_id}/cancel")).json()
+    assert payload["cancelled"] == [call_id]
+    assert payload["count"] == 1
+    assert (await call).status_code == 503
+    assert hub.router.in_flight() == []
+    assert "cancel" in [event["kind"] for event in hub.store.events(10)]
+
+
+async def test_cancelling_a_call_that_already_ended_is_a_404(client: httpx.AsyncClient) -> None:
+    assert (await client.post("/api/live/999999/cancel")).status_code == 404
+
+
+async def test_cancelling_one_app_leaves_the_others_alone(
+    client: httpx.AsyncClient, hub: Hub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gateway, "call_model", slow_call_model)
+    mine = await start_call(client, hub, "my-app")
+    theirs = await start_call(client, hub, "batch-ocr")
+
+    payload = (await client.post("/api/live/cancel", json={"app": "my-app"})).json()
+    assert payload["count"] == 1
+    assert (await mine).status_code == 503
+    assert [row["app"] for row in hub.router.in_flight()] == ["batch-ocr"]
+
+    assert (await client.post("/api/live/cancel", json={"all": True})).json()["count"] == 1
+    assert (await theirs).status_code == 503
+    assert hub.router.in_flight() == []
+
+
+async def test_a_cancel_needs_a_target(client: httpx.AsyncClient) -> None:
+    assert (await client.post("/api/live/cancel", json={})).status_code == 422
+    assert (await client.post("/api/live/cancel", json={"app": "my-app", "all": True})).status_code == 422
+
+
+async def test_live_rows_carry_the_call_id_and_state(client: httpx.AsyncClient, hub: Hub) -> None:
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    hub.router._register(77, entry, app="my-app", model_request="auto", kind="sync", job_id=None, est_in=0)
+    call = (await client.get("/api/live")).json()["apps"][0]["in_flight"][0]
+    assert (call["call_id"], call["state"]) == (77, "waiting")
+    hub.router.release(77)
+
+
+async def test_status_and_usage_do_not_count_an_abandoned_call_as_an_error(
+    client: httpx.AsyncClient, hub: Hub
+) -> None:
+    for status in ("ok", "error", "abandoned"):
+        hub.store.start_usage(
+            app="my-app",
+            provider="alpha",
+            account="alpha-1",
+            model="alpha/m1",
+            status=status,
+            latency_ms=5,
+            attempt=1,
+        )
+
+    models = (await client.get("/api/status")).json()["models"]
+    row = next(item for item in models if item["key"] == "alpha/m1" and item["account"] == "alpha-1")
+    assert (row["usage_today"]["requests"], row["usage_today"]["errors"]) == (3, 1)
+
+    usage = (await client.get("/api/usage?group_by=app")).json()["rows"]
+    assert [(item["bucket"], item["requests"], item["errors"]) for item in usage] == [("my-app", 3, 1)]

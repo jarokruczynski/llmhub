@@ -232,6 +232,14 @@ async def run_cli(args: list[str], *, cwd: Path, env: dict[str, str], timeout_s:
             await asyncio.wait_for(process.wait(), timeout=5)
         latency_ms = int((time.perf_counter() - started) * 1000)
         return CliRun(-1, "", f"timed out after {timeout_s:g}s", latency_ms, timed_out=True)
+    except asyncio.CancelledError:
+        # the caller gave up (disconnect, kill switch, attempt cap). Cancellation has to reach
+        # the agent itself: an orphaned CLI keeps burning the licence and holds nothing that
+        # would ever be read.
+        kill_group(process)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(process.wait(), timeout=5)
+        raise
     latency_ms = int((time.perf_counter() - started) * 1000)
     return CliRun(
         int(process.returncode or 0),

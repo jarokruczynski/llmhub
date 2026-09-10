@@ -825,13 +825,14 @@
   // chip class and its client-side elapsed ticker (tickLive walks [data-elapsed-base] anywhere
   // in the document, this table included)
   function appLiveChip(call) {
-    var chip = el("span", "live-chip live-chip-on");
+    var waiting = call.state === "waiting";
+    var chip = el("span", "live-chip " + (waiting ? "live-chip-waiting" : "live-chip-on"));
     chip.appendChild(document.createTextNode(call.app));
+    if (waiting) chip.appendChild(el("span", "live-wait", "waiting"));
     chip.appendChild(elapsedNode(call));
     if (num(call.attempt) > 1) chip.appendChild(el("span", "live-attempt", "#" + call.attempt));
-    chip.title = call.app + " calling " + call.model + " on " + call.account + ", " + call.kind +
-      (num(call.attempt) > 1 ? ", attempt " + call.attempt : "") +
-      (call.job_id ? ", job " + call.job_id : "");
+    chip.title = callTitle(call, call.app + " calling " + call.model);
+    if (call.call_id) chip.appendChild(killButton(call, call.app + " on " + call.model));
     return chip;
   }
 
@@ -1003,15 +1004,81 @@
     return n;
   }
 
-  function liveChip(call) {
-    var chip = el("span", "live-chip live-chip-on");
-    chip.appendChild(document.createTextNode(shortModel(call.model)));
-    chip.appendChild(elapsedNode(call));
-    if (num(call.attempt) > 1) chip.appendChild(el("span", "live-attempt", "#" + call.attempt));
-    chip.title = call.model + " on " + call.account + ", " + call.kind +
+  // POST a cancel and refresh the strip from the answer rather than waiting for the next poll
+  function cancelCalls(path, body, label) {
+    return api(path, { method: "POST", body: body || "{}" })
+      .then(function (r) {
+        toast("cancelled " + num(r.count) + " call(s) on " + label, "ok");
+        return loadLive();
+      })
+      .catch(function (e) {
+        // 404 means the call is past cancelling - it ended between the poll and the click, or
+        // it is a stream whose body is already on its way out - not a failure
+        if (e.status === 404) {
+          toast("nothing to cancel on " + label + ": the call is already finished", "warn");
+          return loadLive();
+        }
+        toast("cancel failed: " + errText(e), "bad");
+      });
+  }
+
+  // the x on a live chip. Cancelling one call needs no confirmation - the chip names it, and
+  // the call is the owner's to end; killing a whole app's worth does (see killAppButton)
+  function killButton(call, label) {
+    var b = el("button", "live-kill", "x");
+    b.type = "button";
+    b.title = "cancel this call";
+    b.setAttribute("aria-label", "cancel " + label);
+    b.addEventListener("click", function (ev) {
+      ev.stopPropagation();
+      b.disabled = true;
+      cancelCalls("api/live/" + call.call_id + "/cancel", "{}", label).then(function () {
+        b.disabled = false;
+      });
+    });
+    return b;
+  }
+
+  function callTitle(call, subject) {
+    return subject + " on " + call.account + ", " + call.kind +
+      (call.state === "waiting" ? ", waiting for a free slot" : "") +
       (num(call.attempt) > 1 ? ", attempt " + call.attempt : "") +
       (call.job_id ? ", job " + call.job_id : "");
+  }
+
+  // a waiting call holds no slot and no vendor: muted, and labelled, so a queue behind a stuck
+  // backend does not read as a model that is working
+  function liveChip(call) {
+    var waiting = call.state === "waiting";
+    var chip = el("span", "live-chip " + (waiting ? "live-chip-waiting" : "live-chip-on"));
+    chip.appendChild(document.createTextNode(shortModel(call.model)));
+    if (waiting) chip.appendChild(el("span", "live-wait", "waiting"));
+    chip.appendChild(elapsedNode(call));
+    if (num(call.attempt) > 1) chip.appendChild(el("span", "live-attempt", "#" + call.attempt));
+    chip.title = callTitle(call, call.model);
+    if (call.call_id) chip.appendChild(killButton(call, call.model));
     return chip;
+  }
+
+  function killAppButton(app, count) {
+    var b = el("button", "live-kill live-kill-all", "kill " + count);
+    b.type = "button";
+    b.title = "cancel every call " + app + " has in flight";
+    b.addEventListener("click", function () {
+      ask({
+        title: "Cancel " + count + " calls?",
+        body: "Every call " + app + " has in flight stops: the vendor call is cancelled, the " +
+          "slot frees up, and a client still waiting gets a 503.",
+        confirm: "Cancel calls"
+      }).then(function (r) {
+        if (!r) return null;
+        b.disabled = true;
+        return cancelCalls("api/live/cancel", JSON.stringify({ app: app }), app).then(function () {
+          b.disabled = false;
+        });
+      });
+    });
+    return b;
   }
 
   function recentChip(row) {
@@ -1037,7 +1104,8 @@
       row.appendChild(el("div", "live-app", r.app));
       var chips = el("div", "live-chips");
       var busy = {};
-      (r.in_flight || []).forEach(function (c) {
+      var live = r.in_flight || [];
+      live.forEach(function (c) {
         busy[c.model] = true;
         chips.appendChild(liveChip(c));
       });
@@ -1045,6 +1113,8 @@
         if (busy[m.model]) return;
         chips.appendChild(recentChip(m));
       });
+      // one x per chip covers a single call; the row button is for an app that has run away
+      if (live.length > 1) chips.appendChild(killAppButton(r.app, live.length));
       row.appendChild(chips);
       host.appendChild(row);
     });
@@ -1072,7 +1142,7 @@
         if (!entry) { entry = { count: 0, calls: [] }; map[key] = entry; }
         entry.count++;
         entry.calls.push({
-          app: r.app, model: c.model, account: c.account,
+          app: r.app, model: c.model, account: c.account, call_id: c.call_id, state: c.state,
           elapsed_s: c.elapsed_s, attempt: c.attempt, kind: c.kind, job_id: c.job_id
         });
       });

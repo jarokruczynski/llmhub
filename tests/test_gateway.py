@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
 import json
+from typing import Any
 
 import httpx
 import pytest
 import respx
+from starlette.requests import Request
 
+from llmhub import gateway
 from llmhub.gateway import execute_chat, stream_body
 from llmhub.runtime import Hub
 from llmhub.status import model_rows
@@ -713,3 +717,130 @@ async def test_models_rows_carry_the_room_a_client_sizes_max_tokens_against(
     unknown = next(item for item in data if item["id"] == "beta/m2")
     assert unknown["hub"]["remaining_out"] is None
     assert unknown["hub"]["window_limit"] is None
+
+
+# --- orphaned calls ------------------------------------------------------------------------
+
+
+async def slow_call_model(hub: Hub, entry: Any, body: Any, app: str, attempt_no: int, **kw: Any) -> Any:
+    await asyncio.sleep(5)
+    raise AssertionError("the call should have been cancelled")
+
+
+@respx.mock
+async def test_a_client_that_walks_away_cancels_the_vendor_call(
+    client: httpx.AsyncClient, hub: Hub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gateway, "DISCONNECT_POLL_S", 0.01)
+    monkeypatch.setattr(gateway, "call_model", slow_call_model)
+    gone = asyncio.Event()
+
+    async def disconnected(self: Any) -> bool:
+        return gone.is_set()
+
+    monkeypatch.setattr(Request, "is_disconnected", disconnected)
+    request = asyncio.create_task(
+        client.post(
+            "/v1/chat/completions", json=dict(BODY, model="alpha/m1"), headers={"X-Hub-App": "my-app"}
+        )
+    )
+    while not hub.router.in_flight():
+        await asyncio.sleep(0)
+    gone.set()
+    response = await request
+
+    assert response.status_code == 499
+    assert response.json()["error"]["type"] == "client_gone"
+    assert hub.router.in_flight() == []
+    row = hub.store.query("SELECT * FROM usage")[0]
+    assert (row["status"], row["error_code"], row["model"]) == ("abandoned", "client_gone", "alpha/m1")
+    assert "client_gone" in [event["kind"] for event in hub.store.events(10)]
+
+
+@respx.mock
+async def test_an_abandoned_call_is_not_an_error_for_the_app(
+    client: httpx.AsyncClient, hub: Hub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gateway, "DISCONNECT_POLL_S", 0.01)
+    monkeypatch.setattr(gateway, "call_model", slow_call_model)
+
+    async def disconnected(self: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(Request, "is_disconnected", disconnected)
+    await client.post(
+        "/v1/chat/completions", json=dict(BODY, model="alpha/m1"), headers={"X-Hub-App": "my-app"}
+    )
+
+    rows = hub.store.usage_rows(since=None, group_by="app")
+    assert [(row["bucket"], row["requests"], row["errors"]) for row in rows] == [("my-app", 1, 0)]
+    assert [row["errors"] for row in hub.store.apps()] == [0]
+    assert hub.store.model_stats("alpha-1", "alpha/m1")["last_error"] is None
+
+
+@respx.mock
+async def test_the_owner_can_kill_a_call_and_the_client_gets_a_503(
+    client: httpx.AsyncClient, hub: Hub, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(gateway, "call_model", slow_call_model)
+    request = asyncio.create_task(
+        client.post(
+            "/v1/chat/completions", json=dict(BODY, model="alpha/m1"), headers={"X-Hub-App": "my-app"}
+        )
+    )
+    while not hub.router.in_flight():
+        await asyncio.sleep(0)
+    assert hub.router.cancel_call(hub.router.in_flight()[0]["call_id"]) is True
+    response = await request
+
+    assert response.status_code == 503
+    assert response.json()["error"]["type"] == "cancelled_by_owner"
+    assert response.headers["x-hub-attempts"] == "alpha/m1:abandoned"
+    assert hub.router.in_flight() == []
+
+
+@respx.mock
+async def test_a_stream_the_client_stops_reading_releases_its_entry(
+    client: httpx.AsyncClient, hub: Hub
+) -> None:
+    respx.post(ALPHA_URL).mock(
+        return_value=httpx.Response(
+            200, content=SSE_WITH_USAGE, headers={"content-type": "text/event-stream"}
+        )
+    )
+    result = await execute_chat(
+        hub,
+        body=dict(BODY, model="alpha/m1", stream=True),
+        app="my-app",
+        model_request="alpha/m1",
+        stream=True,
+    )
+    assert len(hub.router.in_flight()) == 1
+    # what Starlette does to the body generator when the client goes away mid-response: the
+    # generator is closed where it stands, and its `finally` is the only thing that releases
+    body = stream_body(hub, result.result, result.call_id)
+    await body.__anext__()
+    await body.aclose()
+    assert hub.router.in_flight() == []
+    row = hub.store.query("SELECT * FROM usage")[0]
+    assert row["stream"] == 1 and row["status"] == "ok"
+
+
+@respx.mock
+async def test_a_stream_abandoned_through_the_wire_leaves_nothing_in_flight(
+    client: httpx.AsyncClient, hub: Hub
+) -> None:
+    respx.post(ALPHA_URL).mock(
+        return_value=httpx.Response(
+            200, content=SSE_WITH_USAGE, headers={"content-type": "text/event-stream"}
+        )
+    )
+    async with client.stream(
+        "POST",
+        "/v1/chat/completions",
+        json=dict(BODY, model="alpha/m1", stream=True),
+        headers={"X-Hub-App": "my-app"},
+    ) as response:
+        assert response.status_code == 200
+        # the client hangs up without reading a single chunk
+    assert hub.router.in_flight() == []

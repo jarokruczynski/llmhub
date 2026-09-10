@@ -17,3 +17,15 @@ def test_the_window_cell_labels_a_request_count() -> None:
     app_js = (Path(dev_mock.__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
     assert 'var isRequests = unit === "requests";' in app_js
     assert '(isRequests ? " req" : "")' in app_js
+
+
+def test_the_mock_serves_a_waiting_call_for_the_kill_switch() -> None:
+    states = {call["state"] for call in dev_mock.LIVE_CALLS}
+    assert states == {"running", "waiting"}
+    assert len({call["call_id"] for call in dev_mock.LIVE_CALLS}) == len(dev_mock.LIVE_CALLS)
+
+
+def test_the_live_chip_carries_a_kill_button() -> None:
+    app_js = (Path(dev_mock.__file__).parent / "static" / "app.js").read_text(encoding="utf-8")
+    assert 'cancelCalls("api/live/" + call.call_id + "/cancel", "{}", label)' in app_js
+    assert 'cancelCalls("api/live/cancel", JSON.stringify({ app: app }), app)' in app_js

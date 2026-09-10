@@ -247,8 +247,9 @@ candidate may not share the same restriction. A 400 that names no parameter (e.g
   errors; `GET api/usage/timeseries?bucket=hour|day&since=` for charts.
 - `GET api/events?limit=` -> recent errors/quota hits/fallbacks (ts, app, model, kind, message).
 - `GET api/live?window_min=15` -> {generated_at, window_min, in_flight_total, apps:[{app,
-  in_flight:[{model, account, kind, elapsed_s, attempt, job_id}], recent:[{model, calls,
-  out_tokens}]}]} - calls running right now plus what each app used over the window. In-flight
+  in_flight:[{call_id, state, model, account, kind, elapsed_s, attempt, job_id}],
+  recent:[{model, calls, out_tokens}]}]} - calls running right now plus what each app used over
+  the window; `state` is `waiting` (queued for a concurrency slot) or `running`. In-flight
   comes from the router's memory, `recent` from one grouped query; cheap enough for a 2 s poll.
 - `GET api/jobs?state=` (live states by default, `all` for history) ; `GET api/apps`
   (per-app totals, paused flag, and `queued`/`running`/`cap` - the app's current fair share).
@@ -259,7 +260,9 @@ candidate may not share the same restriction. A 400 that names no parameter (e.g
 - Mutations (token on LAN): `POST api/models/{key}/forgive`, `POST api/models/{key}/disable`,
   `POST api/models/{key}/enable`, `DELETE api/models/{key}/observed` (drop the measured caps,
   -> {key, cleared, ts}), `POST api/apps/{app}/pause|resume`, `POST api/promos`,
-  `PATCH api/promos/{id}` {status: new|known|used|expired, note}.
+  `PATCH api/promos/{id}` {status: new|known|used|expired, note},
+  `POST api/live/{call_id}/cancel` and `POST api/live/cancel` {app} | {all: true}
+  -> {cancelled:[call_id], count, ts}.
 
 ## Dashboard UI (server-rendered HTML + vanilla JS, polls api/status every 10 s)
 Pages: Models (table: provider, model, caps, status pill, remaining per window with reset
@@ -1027,3 +1030,66 @@ status is not `quota`: a call the vendor refused for quota was never charged to 
 a request cap says how many calls fit, never how big one may be, so it never lands in
 `remaining_out`. The 429 body, the selection rejection row and `X-Hub-Remaining-Requests`
 carry it; the binding window named in a rejection is now the axis that actually blocked.
+
+## v0.19 orphaned calls
+Measured on the live hub: 61 calls in flight for one client that had been stopped for hours,
+ages 83 s to 3516 s, 41 of them queued on a model that answers `500` in under three seconds.
+Every antigravity call that day ended in `cli_timeout` after exactly 240 s, with nine or ten
+`agy` children running at once.
+
+**The semaphore queue was unbounded.** `Router.run` checked the budget at the top of the
+candidate loop, before `async with guard`, and the acquire had no timeout: dozens of runs whose
+clients had timed out long ago queued for two CLI slots (61 x 240 s / 2 is about two hours),
+each eventually burning a 240 s call nobody would read. The in-flight entry was written after
+the acquire, so a queued run was displayed under the model of its previous attempt.
+
+**The budget now bounds waits and attempts, not just candidates.** The acquire runs under
+`asyncio.wait_for` with half of what is left of the budget (`SLOT_WAIT_SHARE`) - never all of
+it, because the rest of the pool is worth more than a longer wait on a pair that is already
+busy. A timeout notes the attempt `busy` / `slot_wait` and moves on. A pair with
+`concurrency * 2` runs already queued (`SLOT_QUEUE_FACTOR`) is skipped without waiting at all
+(`slot_queue_full`). After the acquire the budget is re-checked, so a slot that came free at
+the deadline is handed on rather than spent. Each attempt runs under
+`min(remaining, vendor bound) + ATTEMPT_GRACE_S` (15 s): the grace is what keeps the hub's
+cancel from racing the backend's own timeout, which classifies its failure better than we can.
+A timed-out attempt is `retry` / `attempt_timeout`, cools the candidate down and ends the run -
+there is no budget left for another. Jobs pass `budget_s=None` and keep unbounded waits: a job
+holds no socket, nobody is timing it out, and waiting for a free slot is exactly what it should
+do. Its vendor calls stay bounded by the vendor timeouts as before.
+
+**Cancellation reaches the vendor.** uvicorn does not cancel a handler when the client hangs
+up, so `chat_completions` runs `execute_chat` as a task and polls `request.is_disconnected()`
+every second alongside it; a gone client cancels the run task. For HTTP the cancelled `await`
+closes the httpx request; `run_cli` catches `CancelledError`, kills the process group and
+re-raises, so no orphaned agent keeps burning a licence. Inside `Router.run` the cancellation
+releases the slot and the registry entry, notes the attempt `abandoned` with no cooldown and no
+fallback event - the candidate did nothing wrong - and writes one usage row with status
+`abandoned` plus an event (`client_gone`, or `cancel` when the owner did it). `abandoned` is
+excluded from every error count in `store.py`: a model must not look broken because a client
+left. The handler answers 499 `client_gone` to a socket that is not there, or 503
+`cancelled_by_owner` with `X-Hub-Attempts` to a caller who is.
+
+**The registry says which half of a call it is.** The entry is created on the first line of the
+run, before any acquire, with `state: "waiting"` and the target model, and flips to `"running"`
+inside the guard right before the vendor call. `in_flight_count` counts running only (the
+`busy()` sort key still asks the semaphore about slots, which is the right question there);
+`waiting_for(entry)` backs the bounded queue. `api/live` rows carry `call_id` and `state`, the
+strip and the Models Apps cell mute a waiting chip and label it. The 3600 s prune stays as a
+safety net but now logs a warning: with bounded waits and the disconnect watcher it should
+never fire again.
+
+**Kill switch.** `POST api/live/{call_id}/cancel`, and `POST api/live/cancel` with
+`{"app": ...}` or `{"all": true}`. The router keeps `call_id -> asyncio.Task` (a handler's run
+task, or a job worker's) and cancels it; everything else is the cancellation path above. A job
+cancelled this way, or through `DELETE /jobs/{id}` while running, ends `cancelled` with error
+code `cancelled_by_owner` - the queue tells an owner's cancellation from a worker that died,
+because the second one is a lost lease and gets requeued. Every live chip has an x; a row with
+more than one call in flight also has a "kill N" button behind one confirm. A stream past its
+own run is the one thing the switch cannot end: `router.run` has returned, its task is finished
+and the body belongs to Starlette, so that chip's x answers 404 and the strip says so.
+
+**Dead backends park themselves.** Three consecutive `cli_timeout` or `attempt_timeout` on one
+pair (`TIMEOUT_STRIKES`) park it as `unavailable` with code `timeouts` for the unavailable TTL
+and an event of that kind; any answer resets the count. A backend that never answers looks
+healthy to everything else in the pool, so it keeps being handed callers - three deadlines is
+enough evidence.

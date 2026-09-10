@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import plistlib
 import re
 import time
@@ -28,6 +29,7 @@ from llmhub.cli_backend import (
 from llmhub.config import AccountDef, Entry, ModelDef, ProviderDef, Registry
 from llmhub.providers_catalog import COPILOT_MODEL_IDS, COPILOT_MODEL_NOTE
 from llmhub.providers_catalog import template as catalog_template
+from llmhub.router import AllCandidatesFailed
 from llmhub.runtime import Hub
 from llmhub.status import check_rows
 from llmhub.vendor_errors import classify
@@ -44,6 +46,7 @@ if [ "$1" = "models" ]; then
 fi
 if [ -n "$AGY_LOG" ]; then
   {
+    echo "PID=$$"
     echo "CWD=$(pwd)"
     echo "PATH=$PATH"
     echo "LEAK=${LLMHUB_TEST_SECRET:-none}"
@@ -919,3 +922,34 @@ async def test_the_auto_alias_does_not_reach_for_copilot(copilot_hub: Hub, clien
     # free pool is only there to catch a failure
     own = copilot_hub.router.select(model_request="copilot")
     assert [entry.key for entry in own.candidates[:2]] == [COPILOT_MODEL, "copilot/claude-opus-5"]
+
+
+async def test_a_cancelled_call_kills_the_cli_process_group(
+    hub: Hub, tmp_path: Path, cli_log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The caller's deadline reaches the agent itself, not just the coroutine waiting on it."""
+    register_cli(hub, fake_cli(tmp_path), timeout_s=30)
+    monkeypatch.setenv("AGY_MODE", "slow")
+    hub.router.attempt_grace_s = 0.1
+    entry = hub.registry.entry(MODEL, "antigravity-main")
+    assert entry is not None
+
+    async def call(candidate: Entry, attempt_no: int) -> Any:
+        from llmhub.cli_backend import call_cli
+
+        return await call_cli(hub, candidate, BODY, "my-app", attempt_no)
+
+    with pytest.raises(AllCandidatesFailed) as excinfo:
+        await hub.router.run([entry], call, app="my-app", budget_s=0.3)
+    assert [item["error_code"] for item in excinfo.value.attempts] == ["attempt_timeout"]
+
+    pid = int(log_values(cli_log, "PID")[0])
+    # the agent runs in its own session, so its pid is also its process group id
+    for _ in range(100):
+        try:
+            os.killpg(pid, 0)
+        except (ProcessLookupError, PermissionError):
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError(f"process group {pid} survived the cancellation")

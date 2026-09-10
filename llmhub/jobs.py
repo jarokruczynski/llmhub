@@ -16,6 +16,7 @@ from .config import Entry
 from .gateway import CallResult, execute_chat
 from .quota import estimate_request_cost
 from .router import (
+    CANCEL_BY_OWNER,
     AllCandidatesFailed,
     NoCandidatesError,
     UnknownModelError,
@@ -156,6 +157,9 @@ class JobQueue:
         self._task: asyncio.Task[None] | None = None
         self._stopping = asyncio.Event()
         self._inflight: dict[str, asyncio.Task[str]] = {}
+        # jobs whose worker was cancelled on request, so `_released` can tell an owner's
+        # cancellation from a worker that simply died
+        self._cancelling: set[str] = set()
         self._inflight_apps: dict[str, list[str]] = {}
         self._last_dispatch: dict[str, datetime] = {}
         self._share_apps: frozenset[str] = frozenset()
@@ -463,10 +467,46 @@ class JobQueue:
                 running.remove(job_id)
             if not running:
                 self._inflight_apps.pop(app, None)
-        if task is not None and not task.cancelled():
-            exc = task.exception()
-            if exc is not None:
-                log.exception("job %s crashed", job_id, exc_info=exc)
+        if task is None:
+            return
+        if task.cancelled():
+            # a cancelled task is either an owner's cancellation or a worker that died; only
+            # the first ends the job, the second is a lost lease and gets requeued
+            asked_for = job_id in self._cancelling or job_id in self.hub.router.cancelled_jobs
+            self._cancelling.discard(job_id)
+            self.hub.router.cancelled_jobs.discard(job_id)
+            if asked_for:
+                self.close_cancelled(job_id)
+            return
+        exc = task.exception()
+        if exc is not None:
+            log.exception("job %s crashed", job_id, exc_info=exc)
+
+    def close_cancelled(self, job_id: str) -> None:
+        """Mark a cancelled job terminal, unless something already did."""
+        job = self.hub.store.job(job_id)
+        if job is None or job["state"] in TERMINAL_STATES:
+            return
+        self.hub.store.update_job(
+            job_id,
+            state="cancelled",
+            finished_at=now_iso(),
+            lease_until=None,
+            next_attempt_at=None,
+            error=json.dumps({"code": CANCEL_BY_OWNER, "message": "cancelled while running"}),
+        )
+        self.hub.store.add_event(
+            kind="job", message=f"job {job_id} cancelled while running", app=str(job["app"])
+        )
+
+    def cancel_running(self, job_id: str) -> bool:
+        """Cancel the worker task of a running job. The vendor call goes with it."""
+        task = self._inflight.get(job_id)
+        if task is None or task.done():
+            return False
+        self._cancelling.add(job_id)
+        task.cancel()
+        return True
 
     def shares(self) -> dict[str, dict[str, Any]]:
         """Per-app queue picture for `GET api/apps` and the Queue tab.
@@ -693,11 +733,24 @@ async def get_job(request: Request, job_id: str) -> dict[str, Any]:
 @router.delete("/jobs/{job_id}")
 async def cancel_job(request: Request, job_id: str) -> dict[str, Any]:
     require_token(request)
-    store = hub_of(request).store
+    hub = hub_of(request)
+    store = hub.store
     job = store.job(job_id)
     if job is None:
         raise HTTPException(status_code=404, detail="job not found")
     if job["state"] in TERMINAL_STATES:
         return {"id": job_id, "state": job["state"], "cancelled": False}
-    store.update_job(job_id, state="cancelled", finished_at=now_iso(), lease_until=None)
-    return {"id": job_id, "state": "cancelled", "cancelled": True}
+    queue = queue_of(hub)
+    # a running job holds a vendor call and a concurrency slot; flipping the row alone would
+    # leave both running to the end and the slot blocked for everyone behind it
+    stopped = bool(queue and queue.cancel_running(job_id))
+    error = json.dumps({"code": CANCEL_BY_OWNER, "message": "cancelled while running"}) if stopped else None
+    store.update_job(
+        job_id,
+        state="cancelled",
+        finished_at=now_iso(),
+        lease_until=None,
+        next_attempt_at=None,
+        error=error,
+    )
+    return {"id": job_id, "state": "cancelled", "cancelled": True, "stopped_worker": stopped}
