@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>llmhub</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%232f6feb'/%3E%3Crect x='3' y='8' width='2' height='5' fill='white'/%3E%3Crect x='7' y='5' width='2' height='8' fill='white'/%3E%3Crect x='11' y='3' width='2' height='10' fill='white'/%3E%3C/svg%3E">
+<base href="./">
+<script>
+(function () {
+  var p = location.pathname;
+  if (p.charAt(p.length - 1) !== "/") {
+    document.getElementsByTagName("base")[0].href = p + "/";
+  }
+})();
+</script>
+<link rel="stylesheet" href="static/app.css?v={{ asset_v }}">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">llmhub</div>
+  <div class="summary" id="summary">
+    <span class="chip" id="sum-models">models -</span>
+    <span class="chip" id="sum-queue">queue -</span>
+    <span class="chip" id="sum-age">updated -</span>
+  </div>
+  <div class="topbar-actions">
+    <button type="button" class="btn" id="refresh-btn">Refresh</button>
+    <button type="button" class="btn" id="token-btn">Token</button>
+  </div>
+</header>
+
+<section class="live" id="live" hidden aria-label="Live activity">
+  <div class="live-head">
+    <span class="live-title">Live</span>
+    <span class="chip" id="live-count">idle</span>
+  </div>
+  <div class="live-rows" id="live-rows"></div>
+</section>
+
+<nav class="tabs" id="tabs">
+  <button type="button" class="tab" data-tab="models">Models</button>
+  <button type="button" class="tab" data-tab="usage">Usage</button>
+  <button type="button" class="tab" data-tab="queue">Queue</button>
+  <button type="button" class="tab" data-tab="accounts">Accounts</button>
+  <button type="button" class="tab" data-tab="promos">Promos</button>
+  <button type="button" class="tab" data-tab="events">Events</button>
+</nav>
+
+<div class="notice" id="notice" hidden></div>
+
+<main>
+  <section class="panel" data-panel="models" hidden>
+    <div class="panel-head">
+      <h2>Models</h2>
+    </div>
+    <div class="filter-bar" id="models-filter">
+      <div class="filter-group" id="models-status-chips" aria-label="Status"></div>
+      <div class="filter-group" id="models-caps-chips" aria-label="Caps"></div>
+      <label class="filter-field">
+        <span class="filter-label">Provider</span>
+        <select id="models-provider-filter"><option value="">all providers</option></select>
+      </label>
+      <label class="filter-field filter-search">
+        <span class="filter-label">Search</span>
+        <input type="search" id="models-search" placeholder="provider, model, account, key, error">
+      </label>
+      <label class="inline"><input type="checkbox" id="models-live-only"> in use now</label>
+      <label class="inline"><input type="checkbox" id="models-used-today"> used today</label>
+      <label class="inline"><input type="checkbox" id="models-only-problems"> only non-ok</label>
+      <span class="filter-count" id="models-count">- of -</span>
+      <button type="button" class="linkish" id="models-clear" hidden>Clear filters</button>
+    </div>
+    <div class="scroller">
+      <table id="models-table" class="tbl-fixed">
+        <colgroup>
+          <col class="col-m-provider">
+          <col class="col-m-model">
+          <col class="col-m-account">
+          <col class="col-m-caps">
+          <col class="col-m-status">
+          <col class="col-m-today">
+          <col class="col-m-outtokens">
+          <col class="col-m-lastused">
+          <col class="col-m-apps">
+          <col class="col-m-window">
+          <col class="col-m-window">
+          <col class="col-m-window">
+          <col class="col-m-latency">
+          <col class="col-m-error">
+          <col class="col-m-actions">
+        </colgroup>
+        <thead>
+          <tr>
+            <th data-sort-key="provider" class="th-sortable">Provider<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="model" class="th-sortable">Model<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="account" class="th-sortable">Account<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="caps" class="th-sortable">Caps<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="status" class="th-sortable">Status<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="today" class="th-sortable num">Today<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="out_tokens" class="th-sortable num">Out tokens<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="last_used" class="th-sortable">Last used<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="apps" class="th-sortable">Apps<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="hourly" class="th-sortable">Hourly<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="daily" class="th-sortable">Daily<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="monthly" class="th-sortable">Monthly<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="latency" class="th-sortable num">Latency<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="last_error" class="th-sortable">Last error<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="models-body"><tr class="empty"><td colspan="15">loading</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="usage" hidden>
+    <div class="panel-head">
+      <h2>Usage</h2>
+      <div class="seg" id="usage-window">
+        <button type="button" class="seg-btn" data-window="24h">24h</button>
+        <button type="button" class="seg-btn" data-window="7d">7d</button>
+        <button type="button" class="seg-btn" data-window="30d">30d</button>
+      </div>
+      <div class="seg" id="usage-metric">
+        <button type="button" class="seg-btn" data-metric="total_tokens">tokens</button>
+        <button type="button" class="seg-btn" data-metric="requests">requests</button>
+      </div>
+    </div>
+    <div class="cards">
+      <div class="card"><div class="card-label">Requests</div><div class="card-value num" id="usage-total-req">-</div></div>
+      <div class="card"><div class="card-label">Tokens in</div><div class="card-value num" id="usage-total-in">-</div></div>
+      <div class="card"><div class="card-label">Tokens out</div><div class="card-value num" id="usage-total-out">-</div></div>
+      <div class="card"><div class="card-label">Errors</div><div class="card-value num" id="usage-total-err">-</div></div>
+    </div>
+    <div class="grid2">
+      <div class="block"><h3>By app</h3><div class="bars" id="usage-by-app"></div></div>
+      <div class="block"><h3>By model</h3><div class="bars" id="usage-by-model"></div></div>
+    </div>
+    <div class="block">
+      <h3>By day</h3>
+      <div class="bars" id="usage-by-day"></div>
+    </div>
+    <div class="block">
+      <h3>Timeseries</h3>
+      <div class="strip" id="usage-strip"></div>
+      <div class="strip-legend"><span class="key key-in"></span>in<span class="key key-out"></span>out<span class="key key-err"></span>errors</div>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="queue" hidden>
+    <div class="panel-head"><h2>Queue</h2>
+      <div class="seg" id="queue-state">
+        <button type="button" class="seg-btn" data-state="">live</button>
+        <button type="button" class="seg-btn" data-state="waiting_quota">waiting_quota</button>
+        <button type="button" class="seg-btn" data-state="queued">queued</button>
+        <button type="button" class="seg-btn" data-state="running">running</button>
+        <button type="button" class="seg-btn" data-state="done">done</button>
+        <button type="button" class="seg-btn" data-state="expired">expired</button>
+        <button type="button" class="seg-btn" data-state="all">all</button>
+      </div>
+    </div>
+    <div class="cards" id="queue-depth"></div>
+    <div class="block">
+      <h3>By app</h3>
+      <div class="scroller">
+        <table>
+          <thead><tr><th>App</th><th class="num">Queued</th><th class="num">Running</th><th class="num">Cap</th><th class="num">Requests</th><th class="num">Tokens</th><th class="num">Bans</th><th>Paused</th><th>Actions</th></tr></thead>
+          <tbody id="apps-body"><tr class="empty"><td colspan="9">loading</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="block">
+      <h3>Jobs</h3>
+      <div class="scroller">
+        <table>
+          <thead><tr><th>Id</th><th>App</th><th>Model</th><th>State</th><th class="num">Prio</th><th>Created</th><th>Next window</th><th>Actions</th></tr></thead>
+          <tbody id="jobs-body"><tr class="empty"><td colspan="8">loading</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="accounts" hidden>
+    <div class="panel-head">
+      <h2>Accounts</h2>
+    </div>
+
+    <form class="quick-panel" id="quick-form" autocomplete="off">
+      <div class="quick-head">
+        <h3>Quick add</h3>
+        <span class="dim">paste the key, say who it is from - the hub works out the rest</span>
+      </div>
+
+      <p class="lan-warn" id="quick-lan-warn" hidden>You are adding a key over plain HTTP on the LAN. Prefer doing this from the Mac.</p>
+
+      <div class="quick-grid">
+        <label class="field">
+          <span class="field-label">From whom</span>
+          <input type="text" id="quick-source" name="source" list="known-providers"
+                 autocomplete="off" spellcheck="false"
+                 placeholder="openrouter, gemini, url or a pasted sentence">
+        </label>
+        <div class="field">
+          <span class="field-label">API key</span>
+          <div class="key-wrap">
+            <input type="password" id="quick-key" name="api_key" autocomplete="off"
+                   spellcheck="false" placeholder="write-only, never returned">
+            <button type="button" class="btn btn-mini" id="quick-key-toggle" aria-pressed="false">Show</button>
+          </div>
+        </div>
+      </div>
+      <datalist id="known-providers"></datalist>
+
+      <div class="quick-extra" id="quick-extra"></div>
+
+      <div class="quick-foot">
+        <button type="button" class="linkish" id="add-account-btn" aria-expanded="false" aria-controls="add-account-form">Advanced</button>
+        <button type="submit" class="btn btn-primary" id="quick-submit">Add</button>
+      </div>
+      <div class="add-result" id="quick-result" hidden></div>
+    </form>
+
+    <form class="add-panel" id="add-account-form" autocomplete="off" hidden>
+      <div class="add-head">
+        <h3 id="add-title">Add account</h3>
+        <button type="button" class="btn btn-mini" id="add-cancel">Cancel</button>
+      </div>
+
+      <p class="lan-warn" id="add-lan-warn" hidden>You are adding a key over plain HTTP on the LAN. Prefer doing this from the Mac.</p>
+
+      <div class="field-grid" id="add-fields">
+        <label class="field">
+          <span class="field-label">Template</span>
+          <select id="add-template" name="template"></select>
+        </label>
+        <label class="field">
+          <span class="field-label">Provider id</span>
+          <input type="text" id="add-provider" name="provider" placeholder="zai" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Account id</span>
+          <input type="text" id="add-account-id" name="account_id" placeholder="zai-main" required>
+        </label>
+        <label class="field">
+          <span class="field-label">Kind</span>
+          <select id="add-kind" name="kind">
+            <option value="openai">openai</option>
+            <option value="anthropic">anthropic</option>
+            <option value="ollama">ollama</option>
+            <option value="claude-code">claude-code</option>
+          </select>
+        </label>
+        <label class="field field-wide">
+          <span class="field-label">Base url</span>
+          <input type="text" id="add-base-url" name="base_url" placeholder="https://api.example.com/v1">
+        </label>
+        <label class="field">
+          <span class="field-label">Env var name</span>
+          <input type="text" id="add-env" name="api_key_env" placeholder="EXAMPLE_API_KEY">
+        </label>
+        <div class="field">
+          <span class="field-label">API key</span>
+          <div class="key-wrap">
+            <input type="password" id="add-key" name="api_key" autocomplete="off" spellcheck="false" placeholder="write-only, never returned">
+            <button type="button" class="btn btn-mini" id="add-key-toggle" aria-pressed="false">Show</button>
+          </div>
+        </div>
+        <label class="field" id="add-activated-field" hidden>
+          <span class="field-label">Activated at</span>
+          <input type="date" id="add-activated" name="activated_at">
+        </label>
+      </div>
+
+      <div class="field-grid" id="add-extra"></div>
+
+      <div class="models-box">
+        <div class="models-box-head">
+          <span class="field-label">Models</span>
+          <span class="dim" id="add-models-hint"></span>
+          <button type="button" class="btn btn-mini" id="add-discover" hidden>Discover models</button>
+        </div>
+        <div class="check-list" id="add-models"></div>
+      </div>
+
+      <div class="add-foot">
+        <a id="add-docs" class="docs-link" target="_blank" rel="noreferrer noopener" hidden>Provider docs</a>
+        <button type="submit" class="btn btn-primary" id="add-submit">Add account</button>
+      </div>
+      <div class="add-result" id="add-result" hidden></div>
+    </form>
+
+    <div id="accounts-body"><p class="empty">loading</p></div>
+  </section>
+
+  <section class="panel" data-panel="promos" hidden>
+    <div class="panel-head"><h2>Promos</h2></div>
+
+    <div class="block" id="scout-box">
+      <div class="scout-head">
+        <h3>Scout</h3>
+        <span class="chip" id="scout-schedule-chip">schedule -</span>
+        <span class="dim mono" id="scout-next">next run -</span>
+        <div class="scout-head-actions">
+          <button type="button" class="linkish" id="scout-runs-toggle" aria-expanded="false" aria-controls="scout-runs-panel">Runs</button>
+          <button type="button" class="btn btn-primary btn-mini" id="scout-run-btn">Run now</button>
+        </div>
+      </div>
+      <div id="scout-summary"><p class="empty">loading</p></div>
+      <div class="scout-runs-panel" id="scout-runs-panel" hidden>
+        <div class="scroller">
+          <table id="scout-runs-table" class="tbl-fixed">
+            <colgroup>
+              <col class="col-sr-started">
+              <col class="col-sr-status">
+              <col class="col-sr-pages">
+              <col class="col-sr-offers">
+              <col class="col-sr-newupd">
+              <col class="col-sr-errors">
+            </colgroup>
+            <thead><tr><th>Started</th><th>Status</th><th class="num">Pages</th><th class="num">Offers</th><th>New/Upd/Skip</th><th class="num">Errors</th></tr></thead>
+            <tbody id="scout-runs-body"><tr class="empty"><td colspan="6">loading</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <form class="form" id="promo-form">
+      <input type="text" name="provider" placeholder="provider" required>
+      <input type="url" name="url" placeholder="https://..." required>
+      <input type="text" name="note" placeholder="note">
+      <button type="submit" class="btn btn-primary">Add</button>
+    </form>
+    <div class="filter-bar" id="promos-filter">
+      <div class="filter-group" id="promos-status-chips" aria-label="Status"></div>
+      <label class="filter-field">
+        <span class="filter-label">Source</span>
+        <select id="promos-source-filter"><option value="">all</option></select>
+      </label>
+      <label class="filter-field filter-search">
+        <span class="filter-label">Search</span>
+        <input type="search" id="promos-search" placeholder="provider, url, note">
+      </label>
+      <label class="inline"><input type="checkbox" id="promos-hide-done"> hide used, expired, rejected</label>
+      <span class="filter-count" id="promos-count">- of -</span>
+      <button type="button" class="btn btn-mini" id="promos-clear">Clear</button>
+    </div>
+    <div class="scroller">
+      <table id="promos-table" class="tbl-fixed">
+        <colgroup>
+          <col class="col-provider">
+          <col class="col-url">
+          <col class="col-note">
+          <col class="col-status">
+          <col class="col-expires">
+          <col class="col-found">
+          <col class="col-source">
+          <col class="col-key">
+          <col class="col-promo-actions">
+        </colgroup>
+        <thead>
+          <tr>
+            <th data-sort-key="provider" class="th-sortable">Provider<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th>Url</th>
+            <th>Note</th>
+            <th data-sort-key="status" class="th-sortable">Status<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="expires" class="th-sortable">Expires<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="found" class="th-sortable">Found<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="source" class="th-sortable">Source<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th data-sort-key="key" class="th-sortable">Key<span class="sort-arrow" aria-hidden="true"></span></th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="promos-body"><tr class="empty"><td colspan="9">loading</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="panel" data-panel="events" hidden>
+    <div class="panel-head"><h2>Events</h2></div>
+    <div class="filter-bar" id="events-filter">
+      <div class="filter-group" id="events-kind-chips" aria-label="Kind"></div>
+      <label class="filter-field">
+        <span class="filter-label">App</span>
+        <select id="events-app-filter"><option value="">all</option></select>
+      </label>
+      <label class="filter-field">
+        <span class="filter-label">Model</span>
+        <select id="events-model-filter"><option value="">all</option></select>
+      </label>
+      <label class="filter-field filter-search">
+        <span class="filter-label">Search</span>
+        <input type="search" id="events-search" placeholder="message, model, app">
+      </label>
+      <div class="seg" id="events-range">
+        <button type="button" class="seg-btn" data-range="1h">1h</button>
+        <button type="button" class="seg-btn" data-range="24h">24h</button>
+        <button type="button" class="seg-btn" data-range="7d">7d</button>
+        <button type="button" class="seg-btn" data-range="all">all</button>
+      </div>
+      <span class="filter-count" id="events-count">- of -</span>
+      <button type="button" class="btn btn-mini" id="events-clear">Clear</button>
+    </div>
+    <div class="scroller">
+      <table id="events-table" class="tbl-fixed">
+        <colgroup>
+          <col class="col-ev-time">
+          <col class="col-ev-kind">
+          <col class="col-ev-app">
+          <col class="col-ev-model">
+          <col class="col-ev-message">
+        </colgroup>
+        <thead><tr><th>Time</th><th>Kind</th><th>App</th><th>Model</th><th>Message</th></tr></thead>
+        <tbody id="events-body"><tr class="empty"><td colspan="5">loading</td></tr></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<div class="modal-back" id="modal" hidden>
+  <div class="modal-box" id="modal-box" role="dialog" aria-modal="true" aria-labelledby="modal-title"></div>
+</div>
+<div class="toasts" id="toasts" aria-live="polite"></div>
+
+<script src="static/app.js?v={{ asset_v }}"></script>
+</body>
+</html>

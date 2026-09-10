@@ -1,0 +1,77 @@
+[project]
+name = "llmhub"
+version = "0.4.0"
+description = "Local LLM gateway: OpenAI-compatible router over free vendor endpoints"
+readme = "README.md"
+license = "MIT"
+authors = [
+    { name = "Jaro", email = "292136398+jarokruczynski@users.noreply.github.com" },
+]
+requires-python = ">=3.12"
+keywords = ["llm", "gateway", "openai-compatible", "self-hosted", "fastapi"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+]
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "pydantic>=2.7",
+    "jinja2>=3.1",
+]
+
+[project.optional-dependencies]
+# better html -> text for the scout; without it collect falls back to a built-in tag stripper
+scout = ["trafilatura>=1.12"]
+
+[project.urls]
+Homepage = "https://github.com/jarokruczynski/llmhub"
+Repository = "https://github.com/jarokruczynski/llmhub"
+Changelog = "https://github.com/jarokruczynski/llmhub/blob/main/CHANGELOG.md"
+Issues = "https://github.com/jarokruczynski/llmhub/issues"
+
+[project.scripts]
+llmhub = "llmhub.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "respx>=0.21",
+    "ruff>=0.6",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["llmhub"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"providers.example.yaml" = "llmhub/data/providers.example.yaml"
+"scout_sources.example.yaml" = "llmhub/data/scout_sources.example.yaml"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Body"]

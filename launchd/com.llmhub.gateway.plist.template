@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    The job execs the repo venv's interpreter directly - no login shell, no `uv run`.
+
+    macOS attributes every file access a job makes to the job's first program, and that
+    program is what the privacy database can hold a grant for. `/bin/zsh` is an Apple
+    platform binary, which is refused a grant by rule, and `uv` re-execs the interpreter
+    as its own child, which puts `uv` in that slot instead. Either way the interpreter -
+    and any agent CLI the hub spawns for a `kind: cli` provider - loses access to
+    protected paths such as ~/.gemini, and the CLI dies on its own state directory with
+    "operation not permitted".
+
+    Environment therefore comes from this dict, not from ~/.zprofile; the gateway sources
+    provider keys itself from ~/.llmhub/env/*.env (or the legacy ~/.detektor if that is
+    the only one present). Set LLMHUB_ENV_DIR before running install.sh to override the
+    directory in this plist too. Dependencies are synced by install.sh.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.llmhub.gateway</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO__/.venv/bin/python3</string>
+        <string>-m</string>
+        <string>llmhub</string>
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <string>--port</string>
+        <string>8800</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__REPO__</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>__HOME__/.local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>LANG</key>
+        <string>C.UTF-8</string>
+        <key>VIRTUAL_ENV</key>
+        <string>__REPO__/.venv</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/llmhub/gateway.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/llmhub/gateway.err.log</string>
+</dict>
+</plist>

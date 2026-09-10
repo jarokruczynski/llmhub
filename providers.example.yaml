@@ -1,0 +1,588 @@
+providers:
+  explabs:
+    kind: openai
+    base_url: https://api.experientiallabs.ai/v1
+    accounts:
+    - id: explabs-main
+      api_key_env: EXPLABS_API_KEY
+    models:
+    - id: gpt-6-astra
+      caps:
+      - text
+      - vision
+      - tools
+      - json
+      - reasoning
+      context: 1050000
+      reset_tz: UTC
+      free:
+        daily:
+          in_tokens: 375000
+          out_tokens: 75000
+        hourly:
+          out_tokens: 30000
+      notes: promo row, list price 10/1 cached/50 per M; daily numbers come from the 429 body, the hourly
+        cap the docs mention is not exposed anywhere reachable; not ZDR, public data only
+    - id: claude-fable-5.1
+      caps:
+      - text
+      - vision
+      - tools
+      - json
+      - reasoning
+      context: 1000000
+      reset_tz: UTC
+      free:
+        daily:
+          in_tokens: 375000
+          out_tokens: 75000
+        hourly:
+          out_tokens: 30000
+      notes: promo row; default route is anthropic direct (position 0), the openrouter route is paid;
+        daily numbers assumed same as gpt-6-astra, not observed
+    - id: gpt-5.6-luna
+      caps:
+      - text
+      - tools
+      - json
+      reset_tz: UTC
+      free:
+        daily:
+          in_tokens: 375000
+          out_tokens: 75000
+        hourly:
+          out_tokens: 30000
+      notes: promo row; windows assumed same as gpt-6-astra, vision not confirmed
+    - id: deepseek-v4-flash
+      caps:
+      - text
+      - tools
+      - json
+      reset_tz: UTC
+      free:
+        daily:
+          in_tokens: 375000
+          out_tokens: 75000
+        hourly:
+          out_tokens: 30000
+      notes: promo row; windows assumed same as gpt-6-astra, vision not confirmed
+    - id: qwen3.8-27b
+      caps:
+      - text
+      - tools
+      - json
+      reset_tz: UTC
+      free:
+        daily:
+          in_tokens: 375000
+          out_tokens: 75000
+        hourly:
+          out_tokens: 30000
+      notes: promo row; windows assumed same as gpt-6-astra, vision not confirmed
+  zai:
+    kind: openai
+    base_url: https://api.z.ai/api/paas/v4
+    accounts:
+    - id: zai-main
+      api_key_env: ZAI_API_KEY
+    models:
+    - id: glm-4.5-flash
+      caps:
+      - text
+      - tools
+      free: {}
+      extra_body:
+        thinking:
+          type: disabled
+      notes: free on the public pricing page; no numeric RPM or concurrency published
+    - id: glm-4.6v-flash
+      caps:
+      - text
+      - vision
+      free: {}
+      notes: free on the public pricing page; probe got code 1305 (transient overload) twice, re-test
+        before trusting the route
+  dashscope:
+    kind: openai
+    base_url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+    accounts:
+    - id: dashscope-main
+      api_key_env: DASHSCOPE_API_KEY
+    models:
+    - id: qwen3.7-plus
+      caps:
+      - text
+      - tools
+      - json
+      free:
+        allowance:
+          total_tokens: 1000000
+          expires_at: null
+      extra_body:
+        enable_thinking: false
+      notes: one-time 1M token bucket per model, valid 90 days from activation, no monthly refill; set
+        expires_at to activation date plus 90 days once known, empty means unknown; returned AllocationQuota.FreeTierOnly
+        (403) on 2026-09-07
+    - id: qwen3-vl-plus
+      caps:
+      - text
+      - vision
+      free:
+        allowance:
+          total_tokens: 1000000
+          expires_at: null
+      notes: same one-time 1M/90-day allowance; policy confirmed generically, not for this model id by
+        name; served 200 on 2026-09-07
+  ollama:
+    kind: openai
+    base_url: http://127.0.0.1:11434/v1
+    accounts:
+    - id: local
+      api_key_env: null
+    models:
+    - id: qwen3:30b-a3b-instruct-2507-q4_K_M
+      caps:
+      - text
+      - json
+      free: {}
+      concurrency: 1
+    - id: gemma3:27b
+      caps:
+      - text
+      - vision
+      free: {}
+      concurrency: 1
+      notes: vision cap taken from the model family, not exercised locally
+  antigravity:
+    kind: cli
+    template: antigravity
+    command: agy
+    concurrency: 2
+    timeout_s: 240
+    env_passthrough:
+    - HOME
+    - PATH
+    - LANG
+    docs_url: https://antigravity.google/pricing
+    accounts:
+    - id: antigravity-main
+      api_key_env: null
+    models:
+    - id: gemini-3.8-flash-high
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gemini-3.8-flash-medium
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gemini-3.8-flash-low
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gemini-3.7-flash-high
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gemini-3.7-flash-medium
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gemini-3.7-flash-low
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gemini-3.6-flash-high
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gemini-3.6-flash-medium
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gemini-3.6-flash-low
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gemini-3.1-pro-high
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gemini-3.1-pro-low
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: claude-sonnet-4-6
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: claude-opus-4-6-thinking
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+    - id: gpt-oss-120b-medium
+      caps:
+      - text
+      - json
+      - reasoning
+      free: {}
+  copilot:
+    kind: cli
+    command: copilot
+    timeout_s: 240
+    env_passthrough:
+    - HOME
+    - PATH
+    - LANG
+    extra_args: []
+    env_deny:
+    - GITHUB_TOKEN
+    - GH_TOKEN
+    - COPILOT_GITHUB_TOKEN
+    - COPILOT_ALLOW_ALL
+    docs_url: https://docs.github.com/en/copilot/concepts/agents/about-copilot-cli
+    template: copilot
+    notes: a Copilot seat that is not the owner's to spend freely, not a free tier - the seat
+      holder sees usage and audit logs, so do not route private-project traffic here
+    accounts:
+    - id: copilot-main
+      api_key_env: null
+    models:
+    - id: auto
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: claude-opus-5
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: claude-sonnet-5
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: claude-fable-5.1
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: claude-fable-5
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: claude-opus-4.8
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: claude-opus-4.8-fast
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: claude-opus-4.7
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: claude-sonnet-4.6
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: claude-haiku-4.5
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gpt-5.6-sol
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gpt-5.6-terra
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gpt-5.6-luna
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gpt-5.5
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gpt-5.4
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gpt-5.4-mini
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gpt-5.3-codex
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gpt-5-mini
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: mai-code-1.1-flash
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: mai-code-1-flash-picker
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gemini-3.8-flash
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gemini-3.7-flash
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gemini-3.6-flash
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: gemini-3.5-flash
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: grok-4.5
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: kimi-k3
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    - id: kimi-k2.7-code
+      caps:
+      - text
+      - json
+      - reasoning
+      notes: a Copilot seat that is not the owner's to spend freely; the seat holder sees usage
+        and audit logs
+      max_ai_credits: 60
+      free: {}
+    opt_in_only: true
+aliases:
+  auto:
+    spread: 4
+    prefer:
+    - explabs/gpt-6-astra
+    - explabs/claude-fable-5.1
+    - antigravity/claude-opus-4-6-thinking
+    - zai/glm-4.5-flash
+    - ollama/qwen3:30b-a3b-instruct-2507-q4_K_M
+  vision:
+    spread: 4
+    require:
+    - vision
+    prefer:
+    - explabs/gpt-6-astra
+    - explabs/claude-fable-5.1
+    - dashscope/qwen3-vl-plus
+    - zai/glm-4.6v-flash
+    - ollama/gemma3:27b
+  fast:
+    spread: 4
+    require:
+    - text
+    prefer:
+    - zai/glm-4.5-flash
+  strong:
+    spread: 3
+    require:
+    - text
+    prefer:
+    - antigravity/claude-opus-4-6-thinking
+    - antigravity/claude-sonnet-4-6
+    - antigravity/gemini-3.1-pro-high
+    - explabs/gpt-6-astra
+    - explabs/claude-fable-5.1
+  local:
+    prefer:
+    - ollama/qwen3:30b-a3b-instruct-2507-q4_K_M
+    - ollama/gemma3:27b
+  # long inputs, strict JSON, verbatim quoting; the app reserves 4000 out tokens per call
+  extract:
+    spread: 3
+    require:
+    - text
+    - json
+    min_context: 24000
+    avoid:
+    - reasoning
+    max_latency_ms: 30000
+    prefer:
+    - gemini/gemini-3.5-flash-lite
+    - gemini/gemini-3.8-flash
+    - explabs/gpt-6-astra
+    - explabs/claude-fable-5.1
+    - cohere/command-a-plus-05-2026
+    - zai/glm-4.5-flash
+    - openrouter/google/gemma-4-31b-it:free
+  copilot:
+    spread: 1
+    require:
+    - text
+    prefer:
+    - copilot/auto
+    - copilot/claude-opus-5
+    - copilot/claude-sonnet-4.6
+    - copilot/claude-haiku-4.5
+    - copilot/gpt-5.6-sol
+    - copilot/gemini-3.8-flash

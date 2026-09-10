@@ -1,0 +1,63 @@
+# Scout source list. Copied to ~/.llmhub/scout_sources.yaml on first run
+# (override the path with LLMHUB_SCOUT_SOURCES). Every block can be turned off on its own;
+# a source that fails is reported in the run and never stops the rest.
+
+# pepper.pl search pages, one url per keyword. Polish deal site: the free-credit promos
+# show up there before they reach any English source.
+pepper:
+  enabled: true
+  search_url: https://www.pepper.pl/search?q={query}
+  keywords:
+  - GLM
+  - tokeny
+  - API AI
+  - LLM
+  - za darmo AI
+  - Claude
+  - OpenAI
+  - Gemini
+  - NVIDIA NIM
+  - OpenCode
+  - Kiro
+  - Cursor
+  - darmowe tokeny
+  - kredyty AI
+
+# every docs_url in the built-in provider catalog: the vendor's own pricing/limits page is
+# the source the curator is told to prefer over any blog post
+catalog_docs: true
+
+# OpenRouter model list filtered to $0 prompt and completion
+openrouter_free: true
+
+# extra pages to read verbatim, e.g. a vendor changelog the catalog does not carry
+pages: []
+
+# RSS/Atom feeds. Add entries with enabled: true to switch them on.
+feeds: []
+# feeds:
+# - id: simonwillison
+#   url: https://simonwillison.net/atom/everything/
+#   enabled: false
+# - id: openrouter-announcements
+#   url: https://openrouter.ai/announcements/rss.xml
+#   enabled: false
+
+# Web search, used only when the key/url env var below is set. Brave has a free tier;
+# a self-hosted SearXNG needs no key at all.
+search:
+  enabled: true
+  results: 5
+  brave:
+    enabled: true
+    api_key_env: BRAVE_SEARCH_API_KEY
+  searxng:
+    enabled: true
+    url_env: LLMHUB_SEARXNG_URL
+  queries:
+  - free LLM API tier no credit card
+  - new free API credits for AI models
+  - darmowe API do modeli AI limity
+  - free OpenAI-compatible endpoint free tier limits
+  - promocja darmowe tokeny LLM
+  - free vision model API rate limits

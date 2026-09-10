@@ -1,0 +1,22 @@
+.venv/
+.venv-ui/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+
+# secrets and local-only notes that must never land in a commit by mistake
+*.env
+docs/*.local.md
+notes/
+.claude/settings.local.json
+
+# artefacts a stray LLMHUB_HOME/LLMHUB_ENV_DIR pointed at the repo dir would create here
+.llmhub/
+backups/
+cli-work/
+signup-debug/
