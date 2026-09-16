@@ -28,6 +28,13 @@ async def dashboard_index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "index.html", {"asset_v": _asset_version()})
 
 
+@router.get("/v2", response_class=HTMLResponse, include_in_schema=False)
+@router.get("/v2/", response_class=HTMLResponse, include_in_schema=False)
+async def dashboard_v2_index(request: Request) -> HTMLResponse:
+    return templates.TemplateResponse(request, "v2.html", {"asset_v": _asset_version()})
+
+
+@router.get("/v2/static/{path:path}", include_in_schema=False)
 @router.get("/static/{path:path}", include_in_schema=False)
 async def dashboard_static(path: str) -> FileResponse:
     target = (STATIC_DIR / path).resolve()
@@ -42,7 +49,7 @@ async def dashboard_static(path: str) -> FileResponse:
 
 def _asset_version() -> str:
     stamps = []
-    for name in ("app.css", "app.js"):
+    for name in ("app.css", "app.js", "v2/v2.css", "v2/v2.js"):
         f = STATIC_DIR / name
         if f.is_file():
             stamps.append(int(f.stat().st_mtime))

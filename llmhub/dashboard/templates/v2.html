@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>LLMHub Studio v2</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%236366f1'/%3E%3Cpath d='M4 8l3 3 5-6' stroke='white' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+  <base href="./">
+  <link rel="stylesheet" href="static/v2/v2.css?v={{ asset_v }}">
+</head>
+<body>
+
+  <!-- Topbar Header -->
+  <header class="studio-header">
+    <div class="brand-group">
+      <a href="v2" class="logo-link">
+        <div class="logo-icon">H</div>
+        <span class="brand-text">LLMHub</span>
+      </a>
+      <span class="version-badge">Studio v2</span>
+    </div>
+
+    <div class="header-status-group">
+      <div class="live-pill" id="live-indicator-pill" title="Click to open Live Activity inspector">
+        <span class="pulse-dot" id="live-pulse-dot"></span>
+        <span id="live-text">Gateway Idle</span>
+      </div>
+      <span class="nav-badge" id="top-models-summary" style="font-size:0.75rem; padding:3px 8px;">Models -</span>
+    </div>
+
+    <div class="header-controls">
+      <a href="./" class="btn btn-switch-v1" title="Switch back to Classic v1 Dashboard">← Classic v1</a>
+      <button type="button" class="btn" id="theme-toggle" title="Toggle Light / Dark mode">☀️ Light</button>
+      <button type="button" class="btn" id="token-btn" title="Set Bearer Auth Token">Token</button>
+      <button type="button" class="btn" id="refresh-btn" title="Reload all data">↻ Refresh</button>
+    </div>
+  </header>
+
+  <!-- Navigation Tabs -->
+  <nav class="studio-nav">
+    <button type="button" class="nav-item active" data-tab="overview">
+      <span>Dashboard</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="playground">
+      <span>Playground</span>
+      <span class="nav-badge" style="background:var(--accent-glow); color:var(--accent-primary)">LIVE</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="models">
+      <span>Models Fleet</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="routing">
+      <span>Routing & Matrix</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="queue">
+      <span>Queue & Jobs</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="accounts">
+      <span>Accounts</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="promos">
+      <span>Promos & Scout</span>
+    </button>
+    <button type="button" class="nav-item" data-tab="events">
+      <span>Events & Audit</span>
+    </button>
+  </nav>
+
+  <!-- Main Content -->
+  <main class="studio-main">
+
+    <!-- TAB 1: OVERVIEW -->
+    <section class="panel active" data-panel="overview">
+      <div class="kpi-grid" id="overview-kpis">
+        <!-- Injected by v2.js -->
+      </div>
+
+      <div class="quick-actions-bar">
+        <span class="quick-actions-title">⚡ Quick Actions:</span>
+        <button type="button" class="btn btn-primary" id="btn-quick-add">+ Quick Add Key</button>
+        <button type="button" class="btn" id="btn-reload-registry">🔄 Reload Registry</button>
+        <button type="button" class="btn" onclick="triggerScoutRun()">🎯 Trigger Scout</button>
+        <button type="button" class="btn" onclick="switchTab('playground')">▶ Open Playground</button>
+      </div>
+
+      <div class="overview-columns">
+        <div class="section-card">
+          <div class="section-header">
+            <span class="section-title">🔥 Most Active Models Today</span>
+            <button type="button" class="btn btn-sm" onclick="switchTab('models')">View All</button>
+          </div>
+          <div id="overview-top-models">
+            <!-- Injected by v2.js -->
+          </div>
+        </div>
+
+        <div class="section-card">
+          <div class="section-header">
+            <span class="section-title">📡 Live Stream Activity</span>
+            <span class="text-muted" style="font-size:0.8rem">Auto-updates</span>
+          </div>
+          <div id="overview-live-summary">
+            <div class="text-muted" style="padding:1rem 0;">Real-time stream monitoring active. Use the <strong>Playground</strong> to test model routing and live streaming.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: PLAYGROUND -->
+    <section class="panel" data-panel="playground">
+      <div class="playground-layout">
+        <!-- Sidebar Config -->
+        <div class="playground-sidebar">
+          <div class="form-group">
+            <label class="form-label" for="playground-model">Routing Target</label>
+            <select class="select" id="playground-model">
+              <!-- Populated by v2.js -->
+            </select>
+            <span class="text-muted" style="font-size:0.72rem">Pick an alias (e.g. <code>auto</code>) or pin a specific model</span>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="playground-app">Client App ID (X-Hub-App)</label>
+            <input type="text" class="input font-mono" id="playground-app" value="studio-playground">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Quick Prompt Presets</label>
+            <div class="presets-chips">
+              <span class="chip-preset" data-prompt="Say 'OK' and explain in one short sentence what you are.">Quick Ping</span>
+              <span class="chip-preset" data-prompt="Solve this puzzle: A farmer needs to cross a river with a wolf, a goat, and a cabbage. Step by step.">Reasoning</span>
+              <span class="chip-preset" data-prompt="Extract this into JSON { name: string, role: string, score: number }: 'Alice is a Senior AI Engineer rating 98/100'. Return only JSON.">Strict JSON</span>
+              <span class="chip-preset" data-prompt="Write a very short poem about open-source AI and free vendor tiers.">Creative</span>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="playground-temp">Temperature (0.0 - 2.0)</label>
+            <input type="number" class="input" id="playground-temp" min="0" max="2" step="0.1" value="0.7">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="playground-max-tokens">Max Tokens</label>
+            <input type="number" class="input" id="playground-max-tokens" min="1" max="8192" value="1024">
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="playground-system">System Prompt (optional)</label>
+            <textarea class="textarea" id="playground-system" rows="3" placeholder="You are a helpful, concise AI assistant..."></textarea>
+          </div>
+
+          <div class="form-group">
+            <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; cursor:pointer">
+              <input type="checkbox" id="playground-stream-toggle" checked>
+              <span>Enable Real-time Streaming (SSE)</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Chat & Telemetry View -->
+        <div class="playground-main">
+          <!-- Real-Time Telemetry Card -->
+          <div class="telemetry-card" id="playground-telemetry" style="display:none;">
+            <div class="telemetry-item">
+              <span class="telemetry-label">Resolved Model</span>
+              <span class="telemetry-value" id="tel-model">-</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Total Duration</span>
+              <span class="telemetry-value" id="tel-latency">-</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Time to 1st Token (TTFT)</span>
+              <span class="telemetry-value" id="tel-ttft">-</span>
+            </div>
+            <div class="telemetry-item">
+              <span class="telemetry-label">Tokens (In / Out)</span>
+              <span class="telemetry-value" id="tel-tokens">-</span>
+            </div>
+          </div>
+
+          <div class="chat-container" id="playground-chat">
+            <div class="message-bubble message-assistant">
+              👋 <strong>LLMHub Playground ready.</strong> Select a routing alias or model, type a prompt below, and hit <em>Send</em> (or <kbd>Ctrl+Enter</kbd>).
+            </div>
+          </div>
+
+          <div class="chat-input-row">
+            <textarea class="textarea chat-input" id="playground-input" placeholder="Type your message here... (Ctrl+Enter to send)"></textarea>
+            <button type="button" class="btn btn-primary" id="playground-send-btn" style="min-width:120px">Send Prompt</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: MODELS FLEET -->
+    <section class="panel" data-panel="models">
+      <div class="models-toolbar">
+        <div class="models-filters">
+          <div class="chips-group" id="models-status-chips">
+            <button type="button" class="filter-chip active" data-status="all">All</button>
+            <button type="button" class="filter-chip" data-status="ready">Ready</button>
+            <button type="button" class="filter-chip" data-status="cooldown">Cooldown</button>
+            <button type="button" class="filter-chip" data-status="quota">Quota Out</button>
+            <button type="button" class="filter-chip" data-status="disabled">Disabled</button>
+          </div>
+
+          <div class="chips-group" id="models-cap-chips">
+            <button type="button" class="filter-chip active" data-cap="all">All Caps</button>
+            <button type="button" class="filter-chip" data-cap="vision">Vision</button>
+            <button type="button" class="filter-chip" data-cap="json">JSON</button>
+            <button type="button" class="filter-chip" data-cap="reasoning">Reasoning</button>
+          </div>
+
+          <select class="select" id="models-provider-select">
+            <option value="">All Providers</option>
+          </select>
+
+          <input type="search" class="input" id="models-search-input" placeholder="Search provider, model, account..." style="width:220px">
+          <span class="text-muted" id="models-filter-count" style="font-size:0.8rem">-</span>
+        </div>
+
+        <div class="chips-group">
+          <button type="button" class="filter-chip active" id="models-view-grid" title="Card Grid View">⊞ Cards</button>
+          <button type="button" class="filter-chip" id="models-view-table" title="Dense Table View">☰ Table</button>
+        </div>
+      </div>
+
+      <div id="models-container">
+        <!-- Rendered by v2.js -->
+      </div>
+    </section>
+
+    <!-- TAB 4: ROUTING & MATRIX -->
+    <section class="panel" data-panel="routing">
+      <h2 style="font-size:1.15rem; font-weight:700; margin-bottom:1rem">Configured Routing Aliases</h2>
+      <div class="aliases-grid" id="routing-aliases-grid">
+        <!-- Populated by v2.js -->
+      </div>
+
+      <!-- Simulator -->
+      <div class="simulator-box">
+        <h3 style="font-size:1.1rem; font-weight:700; margin-bottom:0.5rem">🔮 Interactive Routing Simulator</h3>
+        <p class="text-secondary" style="font-size:0.85rem; margin-bottom:1rem">
+          Test how llmhub evaluates candidate models based on estimated prompt length, capabilities and quota windows.
+        </p>
+
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:1rem; align-items:flex-end">
+          <div class="form-group">
+            <label class="form-label" for="sim-alias">Target Alias</label>
+            <select class="select" id="sim-alias"></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label" for="sim-tokens">Est. Input Tokens</label>
+            <input type="number" class="input" id="sim-tokens" value="1200">
+          </div>
+          <div class="form-group">
+            <label class="form-label">Required Capabilities</label>
+            <div style="display:flex; gap:0.75rem; font-size:0.82rem; padding:0.4rem 0">
+              <label><input type="checkbox" id="sim-req-vision"> Vision</label>
+              <label><input type="checkbox" id="sim-req-json"> JSON</label>
+              <label><input type="checkbox" id="sim-req-reasoning"> Reasoning</label>
+            </div>
+          </div>
+          <div>
+            <button type="button" class="btn btn-primary" id="sim-run-btn" style="width:100%">Run Simulation</button>
+          </div>
+        </div>
+
+        <div class="simulator-result-box" id="sim-result">
+          <div class="text-muted" style="font-size:0.85rem">Click "Run Simulation" to see the winning model.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 5: QUEUE -->
+    <section class="panel" data-panel="queue">
+      <div class="kpi-grid" id="queue-summary-bar" style="margin-bottom:1.5rem">
+        <!-- Injected by v2.js -->
+      </div>
+      <div class="section-card">
+        <div class="section-header">
+          <span class="section-title">Async Jobs Queue</span>
+          <button type="button" class="btn btn-sm" onclick="loadJobs()">↻ Refresh</button>
+        </div>
+        <div id="queue-jobs-list"></div>
+      </div>
+    </section>
+
+    <!-- TAB 6: ACCOUNTS -->
+    <section class="panel" data-panel="accounts">
+      <div class="section-header">
+        <div>
+          <h2 style="font-size:1.15rem; font-weight:700">Configured Accounts & Keys</h2>
+          <p class="text-secondary" style="font-size:0.85rem">Keys reside safely in <code>~/.llmhub/env/</code> and are never returned or logged.</p>
+        </div>
+        <button type="button" class="btn btn-primary" onclick="document.getElementById('modal-quick-add').classList.add('open')">+ Quick Add Account</button>
+      </div>
+
+      <div class="section-card" style="margin-top:1rem">
+        <div id="accounts-list-content">
+          <p class="text-muted">Use <strong>+ Quick Add Account</strong> to connect any provider key with automated endpoint verification.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 7: PROMOS & SCOUT -->
+    <section class="panel" data-panel="promos">
+      <div class="section-card" id="scout-status-card" style="margin-bottom:1.5rem">
+        <!-- Injected by v2.js -->
+      </div>
+      <div class="section-header">
+        <span class="section-title">Free-Tier Leads Watchlist</span>
+        <button type="button" class="btn btn-sm" onclick="loadPromos()">↻ Refresh</button>
+      </div>
+      <div id="promos-list"></div>
+    </section>
+
+    <!-- TAB 8: EVENTS & AUDIT -->
+    <section class="panel" data-panel="events">
+      <div class="section-card" style="margin-bottom:1.5rem">
+        <div class="section-header">
+          <span class="section-title">Token Usage Trend (Last 14 Days)</span>
+        </div>
+        <div id="usage-chart-container" style="min-height:160px">
+          <!-- Injected by v2.js -->
+        </div>
+      </div>
+
+      <div class="section-card">
+        <div class="section-header">
+          <span class="section-title">System & Vendor Error Events</span>
+          <button type="button" class="btn btn-sm" onclick="loadEvents()">↻ Refresh</button>
+        </div>
+        <div id="events-list"></div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Live Calls Inspector Drawer -->
+  <aside class="live-drawer" id="live-drawer">
+    <div class="drawer-header">
+      <span style="font-weight:600; font-size:0.9rem">⚡ In-Flight Gateway Calls</span>
+      <button type="button" class="btn btn-sm" id="live-drawer-close">✕</button>
+    </div>
+    <div class="drawer-body" id="live-drawer-calls">
+      <!-- Injected by v2.js -->
+    </div>
+  </aside>
+
+  <!-- Modal: Quick Add Provider / Key -->
+  <div class="modal-backdrop" id="modal-quick-add">
+    <div class="modal-dialog">
+      <div class="modal-header">
+        <h3 style="font-size:1.1rem; font-weight:700">Quick Add Account</h3>
+        <button type="button" class="btn btn-sm modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="qa-key">API Key (optional for local/cli)</label>
+          <input type="password" class="input font-mono" id="qa-key" placeholder="gsk_... or sk-...">
+        </div>
+        <div class="form-group">
+          <label class="form-label" for="qa-source">Source (Provider Name, Console URL or URL)</label>
+          <input type="text" class="input" id="qa-source" placeholder="e.g. groq, openrouter, or https://console.groq.com/keys">
+          <span class="text-muted" style="font-size:0.75rem">LLMHub resolves templates, discovers models, and verifies with a 1-token test call.</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn modal-close">Cancel</button>
+        <button type="button" class="btn btn-primary" id="qa-submit-btn">Verify & Add Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Scripts -->
+  <script src="static/v2/v2.js?v={{ asset_v }}"></script>
+</body>
+</html>
