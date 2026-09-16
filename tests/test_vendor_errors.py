@@ -371,6 +371,31 @@ def test_payment_required_is_not_found() -> None:
     assert result.kind == "not_found"
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["not enough balance", "insufficient balance", "balance is insufficient", "insufficient funds"],
+)
+def test_no_balance_403_is_not_found_not_auth(text: str) -> None:
+    # novita answers a dead wallet with a 403; without this rule it reads as a lost session and
+    # the pair is retried on every request instead of parked
+    body = json.dumps({"error": {"message": text}})
+    result = classify(403, body, "novita")
+    assert result.kind == "not_found"
+    assert result.rule == "no-balance"
+
+
+def test_zenmux_payg_only_permission_error_is_not_found() -> None:
+    body = json.dumps({"error": {"message": "You have no permission to access this resource (api_key_source: payg)"}})
+    result = classify(403, body, "zenmux")
+    assert result.kind == "not_found"
+    assert result.rule == "zenmux-payg-only"
+
+
+def test_zenmux_payg_only_rule_does_not_leak_to_other_providers() -> None:
+    body = json.dumps({"error": {"message": "no permission to access this resource"}})
+    assert classify(403, body, "alpha").kind == "auth"
+
+
 def test_opencode_zen_server_error_on_a_400_is_unavailable() -> None:
     result = classify(400, ZEN_UNAVAILABLE, "opencode-zen")
     assert result.kind == "unavailable"

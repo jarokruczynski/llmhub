@@ -282,6 +282,20 @@ async def test_run_all_candidates_failed(hub: Hub) -> None:
     assert len(excinfo.value.attempts) == 2
 
 
+async def test_run_stops_at_max_attempts_before_walking_the_whole_pool(hub: Hub) -> None:
+    hub.router.max_attempts = 3
+    selection = hub.router.select(model_request="auto", now=NOW)
+    assert len(selection.candidates) > hub.router.max_attempts
+
+    async def call(entry: Entry, attempt_no: int) -> str:
+        raise UpstreamError(Classification("error", "400", "boom"), 400)
+
+    with pytest.raises(AllCandidatesFailed) as excinfo:
+        await hub.router.run(selection.candidates, call)
+    assert len(excinfo.value.attempts) == 3
+    assert excinfo.value.budget_exhausted is True
+
+
 def test_semaphore_is_per_account_and_model(hub: Hub) -> None:
     first = entry_of(hub, "alpha/m1", "alpha-1")
     second = entry_of(hub, "alpha/m1", "alpha-2")

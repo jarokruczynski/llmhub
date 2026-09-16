@@ -289,6 +289,64 @@ async def test_terminal_rows_are_purged_after_the_retention_window(
     assert hub.store.job(recent) is not None
 
 
+def insert_event(hub: Hub, kind: str, ts: str) -> None:
+    hub.store.execute(
+        "INSERT INTO events (ts, app, model, account, kind, message) VALUES (?, ?, ?, ?, ?, ?)",
+        (ts, None, None, None, kind, "x"),
+    )
+
+
+async def test_purge_old_rows_clears_noisy_events_but_keeps_others_and_recent_ones(
+    client: httpx.AsyncClient, hub: Hub
+) -> None:
+    now = jobs_module.utcnow()
+    old = to_iso(now - timedelta(days=hub.settings.event_retention_days, hours=1))
+    recent = to_iso(now - timedelta(hours=1))
+    for kind in jobs_module.NOISY_EVENT_KINDS:
+        insert_event(hub, kind, old)
+    insert_event(hub, "queue", old)
+    insert_event(hub, "error", recent)
+
+    hub.jobs.purge_old_rows(now)
+
+    rows = {(row["kind"], row["ts"]) for row in hub.store.query("SELECT kind, ts FROM events")}
+    for kind in jobs_module.NOISY_EVENT_KINDS:
+        assert (kind, old) not in rows
+    assert ("queue", old) in rows
+    assert ("error", recent) in rows
+
+
+async def test_purge_old_rows_clears_old_error_usage_but_keeps_ok_and_quota_rows(
+    client: httpx.AsyncClient, hub: Hub
+) -> None:
+    now = jobs_module.utcnow()
+    old = to_iso(now - timedelta(days=hub.settings.usage_error_retention_days, hours=1))
+    recent = to_iso(now - timedelta(hours=1))
+
+    def usage_row(status: str, ts: str) -> int:
+        return hub.store.start_usage(
+            app="test",
+            provider="alpha",
+            account="alpha-1",
+            model="alpha/m1",
+            status=status,
+            latency_ms=1,
+            attempt=1,
+            ts=ts,
+        )
+
+    old_error = usage_row("error", old)
+    old_ok = usage_row("ok", old)
+    old_quota = usage_row("quota", old)
+    recent_error = usage_row("error", recent)
+
+    hub.jobs.purge_old_rows(now)
+
+    remaining = {row["id"] for row in hub.store.query("SELECT id FROM usage")}
+    assert old_error not in remaining
+    assert {old_ok, old_quota, recent_error} <= remaining
+
+
 async def test_job_row_keeps_the_shape_older_clients_read(client: httpx.AsyncClient, hub: Hub) -> None:
     job = (await client.post("/jobs", json=body())).json()
     assert {"id", "app", "model", "state", "result", "error", "created_at"} <= set(job)

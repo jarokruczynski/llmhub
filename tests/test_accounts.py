@@ -384,6 +384,7 @@ def test_catalog_covers_the_designed_providers() -> None:
         "poe",
         "ollama-cloud",
         "antigravity",
+        "gemini-cli",
         "copilot",
         "custom",
     ]
