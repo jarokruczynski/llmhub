@@ -24,6 +24,7 @@ COOLDOWN_SECONDS = 60.0
 # cooldown for exactly that long instead and the run moves to the next candidate.
 RETRY_WAIT_MAX_S = 8.0
 NOT_FOUND_TTL_S = 7 * 24 * 3600.0
+MAX_ATTEMPTS = 16
 UNAVAILABLE_TTL_S = 600.0
 # `error` is the vendor's opinion of the request. One vendor can be wrong about it; three
 # providers that all say the request is bad are describing the request, not themselves.
@@ -200,6 +201,7 @@ class Router:
         not_found_ttl_s: float = NOT_FOUND_TTL_S,
         unavailable_ttl_s: float = UNAVAILABLE_TTL_S,
         attempt_grace_s: float = ATTEMPT_GRACE_S,
+        max_attempts: int = MAX_ATTEMPTS,
     ) -> None:
         self.registry = registry
         self.store = store
@@ -211,6 +213,7 @@ class Router:
         self.not_found_ttl_s = not_found_ttl_s
         self.unavailable_ttl_s = unavailable_ttl_s
         self.attempt_grace_s = attempt_grace_s
+        self.max_attempts = max_attempts
         self._semaphores: dict[tuple[str, str], asyncio.Semaphore] = {}
         self._cooldowns: dict[tuple[str, str], datetime] = {}
         self._last_used: dict[tuple[str, str], datetime] = {}
@@ -772,6 +775,12 @@ class Router:
                 # the first candidate always runs: a budget shorter than one call would turn
                 # every request into a 502 without ever asking a vendor
                 if attempts and over_budget():
+                    budget_exhausted = True
+                    break
+                # the pool is walked in preference order, so a request the first dozen pairs
+                # cannot serve is not saved by the hundredth - it just spends the budget and
+                # writes a usage row per refusal
+                if self.max_attempts and len(attempts) >= self.max_attempts:
                     budget_exhausted = True
                     break
                 current = entry

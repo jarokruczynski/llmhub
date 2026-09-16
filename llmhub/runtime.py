@@ -34,6 +34,7 @@ class Hub:
             self.quota,
             not_found_ttl_s=settings.not_found_ttl_s,
             unavailable_ttl_s=settings.unavailable_ttl_s,
+            max_attempts=settings.max_attempts,
         )
         self.client = client or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, follow_redirects=False)
         self.jobs: Any = None
@@ -68,6 +69,7 @@ class Hub:
             not_found_ttl_s=self.router.not_found_ttl_s,
             unavailable_ttl_s=self.router.unavailable_ttl_s,
             attempt_grace_s=self.router.attempt_grace_s,
+            max_attempts=self.router.max_attempts,
         )
         router._semaphores = self.router._semaphores
         router._cooldowns = self.router._cooldowns

@@ -380,6 +380,10 @@ class Settings:
     job_lease_margin_s: int = 60
     queue_max_per_app: int = 200
     job_retention_days: int = 7
+    # per-attempt error/fallback events and failed usage rows: kept long enough to debug the
+    # day, not long enough to bury the file. Served calls and quota rows are never purged.
+    event_retention_days: int = 3
+    usage_error_retention_days: int = 2
     # how long an (account, model) pair stays parked after the vendor refused the route itself.
     # not_found is durable - the model is not on this key's plan - so it is parked for days; a
     # provider-side outage reported as a 4xx clears on its own, so minutes.
@@ -388,6 +392,10 @@ class Settings:
     # wall clock one sync or stream call may spend walking the candidate pool. The client read
     # timeout is 120 s, so this has to leave the response time to get back.
     run_budget_s: int = 90
+    # candidates one run may walk. The pool is hundreds of pairs deep, and a bad day parks
+    # most of them, so without a ceiling one request writes a usage row per dead pair while
+    # the caller waits out the whole budget.
+    max_attempts: int = 16
     # the scout talks to the hub through its own OpenAI wire, so it goes through the same
     # routing, quota accounting and free-only policy as any other client
     hub_base_url: str = "http://127.0.0.1:8800/v1"
@@ -422,9 +430,12 @@ class Settings:
             job_lease_margin_s=_positive_int(env, "LLMHUB_JOB_LEASE_MARGIN_S", 60),
             queue_max_per_app=_positive_int(env, "LLMHUB_QUEUE_MAX_PER_APP", 200),
             job_retention_days=_positive_int(env, "LLMHUB_JOB_RETENTION_DAYS", 7),
+            event_retention_days=_positive_int(env, "LLMHUB_EVENT_RETENTION_DAYS", 3),
+            usage_error_retention_days=_positive_int(env, "LLMHUB_USAGE_ERROR_RETENTION_DAYS", 2),
             not_found_ttl_s=_positive_int(env, "LLMHUB_NOT_FOUND_TTL_S", 7 * 24 * 3600),
             unavailable_ttl_s=_positive_int(env, "LLMHUB_UNAVAILABLE_TTL_S", 600),
             run_budget_s=_positive_int(env, "LLMHUB_RUN_BUDGET_S", 90),
+            max_attempts=_positive_int(env, "LLMHUB_MAX_ATTEMPTS", 16),
             hub_base_url=env.get("LLMHUB_BASE_URL", "http://127.0.0.1:8800/v1").rstrip("/"),
             scout_at=scout_at or None,
             scout_sources_path=Path(scout_sources) if scout_sources else None,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
 import httpx
@@ -176,6 +176,10 @@ class BanIn(BaseModel):
         return checked_ban_reason(value)
 
 
+# window the per-app totals are built over; the dashboard shows recent behaviour, not history
+APPS_WINDOW_DAYS = 7
+
+
 @router.get("/status")
 async def status(request: Request) -> dict[str, Any]:
     hub = hub_of(request)
@@ -286,7 +290,8 @@ async def jobs(request: Request, state: str | None = None, app: str | None = Non
 async def apps(request: Request) -> dict[str, Any]:
     hub = hub_of(request)
     shares = app_shares(hub)
-    rows = hub.store.apps()
+    since = to_iso(datetime.now(UTC) - timedelta(days=APPS_WINDOW_DAYS))
+    rows = hub.store.apps(since)
     known = {row["app"] for row in rows}
     # an app that only ever queued jobs has no usage rows yet, but it does hold a share
     rows.extend(

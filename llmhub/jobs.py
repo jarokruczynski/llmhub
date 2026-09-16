@@ -43,6 +43,8 @@ LEASE_MAX_ATTEMPTS = 3
 # belongs in every two-second poll
 MAINTAIN_INTERVAL_S = 60.0
 PURGE_INTERVAL_S = 600.0
+# event kinds written once per candidate attempt, so they dwarf every other kind
+NOISY_EVENT_KINDS: tuple[str, ...] = ("error", "fallback")
 DEFAULT_REQUEST_TIMEOUT_S = 600.0
 
 
@@ -165,6 +167,7 @@ class JobQueue:
         self._share_apps: frozenset[str] = frozenset()
         self._last_maintenance: datetime | None = None
         self._last_purge: datetime | None = None
+        self._last_row_purge: datetime | None = None
 
     async def start(self) -> None:
         if self._task is None:
@@ -239,6 +242,7 @@ class JobQueue:
         self.reclaim_lost_leases(now)
         self.expire_stale_jobs(now)
         self.purge_old_jobs(now)
+        self.purge_old_rows(now)
 
     def renew_leases(self, now: datetime) -> None:
         """A job this process is still running holds its slot; the lease says so out loud."""
@@ -384,6 +388,23 @@ class JobQueue:
         if removed:
             self.hub.store.add_event(
                 kind="queue", message=f"purged {removed} finished job row(s) older than {before}"
+            )
+
+    def purge_old_rows(self, now: datetime) -> None:
+        """Retention for the two tables a bad day inflates: attempt events and failed usage."""
+        if self._last_row_purge is not None:
+            if (now - self._last_row_purge).total_seconds() < PURGE_INTERVAL_S:
+                return
+        self._last_row_purge = now
+        settings = self.hub.settings
+        events_before = to_iso(now - timedelta(days=settings.event_retention_days))
+        usage_before = to_iso(now - timedelta(days=settings.usage_error_retention_days))
+        events = self.hub.store.purge_events(events_before, NOISY_EVENT_KINDS)
+        usage = self.hub.store.purge_usage_errors(usage_before)
+        if events or usage:
+            self.hub.store.add_event(
+                kind="queue",
+                message=f"purged {events} attempt event(s) and {usage} failed usage row(s)",
             )
 
     # --- fair share dispatch ---------------------------------------------

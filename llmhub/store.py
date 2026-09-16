@@ -14,6 +14,8 @@ log = logging.getLogger(__name__)
 # A job is live while it can still change on its own; terminal states are the verdicts a
 # client reads. `expired` is terminal: the hub gave up before the client had to.
 LIVE_JOB_STATES: tuple[str, ...] = ("queued", "waiting_quota", "running")
+# newest usage rows the spread clock is seeded from; the rest cannot change the order
+LAST_USED_TAIL_ROWS = 200_000
 TERMINAL_JOB_STATES: tuple[str, ...] = ("done", "failed", "expired", "cancelled")
 DEFAULT_JOB_TTL_S = 6 * 3600
 
@@ -827,8 +829,21 @@ class Store:
             )
         ]
 
-    def last_used_by_model(self) -> dict[tuple[str, str], str]:
-        rows = self.query("SELECT account, model, MAX(ts) AS ts FROM usage GROUP BY account, model")
+    def last_used_by_model(self, tail: int = LAST_USED_TAIL_ROWS) -> dict[tuple[str, str], str]:
+        """Seed the spread clock from the tail of the table rather than all of it.
+
+        Unbounded, this grouped every usage row on the first request after a restart, which
+        is seconds of blocked event loop once the table is millions of rows deep. The spread
+        only needs to know who ran recently, and the newest rows carry exactly that.
+        """
+        if tail and tail > 0:
+            rows = self.query(
+                "SELECT account, model, MAX(ts) AS ts FROM usage "
+                "WHERE id > (SELECT COALESCE(MAX(id), 0) - ? FROM usage) GROUP BY account, model",
+                (tail,),
+            )
+        else:
+            rows = self.query("SELECT account, model, MAX(ts) AS ts FROM usage GROUP BY account, model")
         return {(row["account"], row["model"]): row["ts"] for row in rows if row["ts"]}
 
     def set_model_disabled(self, key: str, disabled: bool, note: str | None = None) -> None:
@@ -866,9 +881,16 @@ class Store:
         row = self.query_one("SELECT paused FROM apps WHERE app = ?", (app,))
         return bool(row["paused"]) if row else False
 
-    def apps(self) -> list[dict[str, Any]]:
+    def apps(self, since: str | None = None) -> list[dict[str, Any]]:
+        """Per-app totals over `since` (all of history when it is None).
+
+        The dashboard polls this, and a full-table GROUP BY is a multi-second scan once the
+        table is millions of rows deep, so the caller passes a window.
+        """
+        where = " WHERE ts >= ?" if since else ""
+        params = (since,) if since else ()
         rows = self.query(
-            """
+            f"""
             SELECT app,
                    COUNT(*) AS requests,
                    COALESCE(SUM(in_tokens), 0) AS in_tokens,
@@ -876,8 +898,9 @@ class Store:
                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
                    SUM(CASE WHEN status NOT IN ('ok', 'abandoned') THEN 1 ELSE 0 END) AS errors,
                    MAX(ts) AS last_seen
-            FROM usage GROUP BY app
-            """
+            FROM usage{where} GROUP BY app
+            """,
+            params,
         )
         by_app = {row["app"]: row for row in rows}
         for row in self.query("SELECT * FROM apps"):
@@ -1284,6 +1307,25 @@ class Store:
             (since,),
         )
         return int(row["n"]) if row else 0
+
+    def purge_events(self, before: str, kinds: tuple[str, ...]) -> int:
+        """Per-attempt chatter is diagnostic only: useful for hours, dead weight for weeks.
+
+        A bad day writes one row per refused candidate per request, so these kinds outgrow
+        everything else in the file by two orders of magnitude.
+        """
+        if not kinds:
+            return 0
+        cur = self.execute(
+            f"DELETE FROM events WHERE kind IN ({', '.join('?' * len(kinds))}) AND ts < ?",
+            (*kinds, before),
+        )
+        return cur.rowcount
+
+    def purge_usage_errors(self, before: str) -> int:
+        """Failed attempts age out; served calls and quota hits stay, they are the books."""
+        cur = self.execute("DELETE FROM usage WHERE status = 'error' AND ts < ?", (before,))
+        return cur.rowcount
 
     def purge_terminal_jobs(self, before: str) -> int:
         """Terminal rows are kept for a while so a client can still read the verdict, then go."""

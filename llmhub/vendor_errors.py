@@ -178,6 +178,27 @@ CODE_RULES: tuple[CodeRule, ...] = (
         provider="copilot",
         texts=("not entitled", "no copilot subscription", "access denied"),
     ),
+    # A 403 that names the wallet is not a lost session: the key is fine, the account simply
+    # cannot pay for this route. Retrying burns a request per candidate for days on end, so
+    # the pair is parked like any other route this key cannot use.
+    CodeRule(
+        name="no-balance",
+        kind="not_found",
+        texts=(
+            "not enough balance",
+            "insufficient balance",
+            "balance is insufficient",
+            "insufficient funds",
+        ),
+    ),
+    # zenmux answers a free key asking for a paid route with a permission error that names the
+    # key's own billing mode; the route is closed to this key until the plan changes.
+    CodeRule(
+        name="zenmux-payg-only",
+        kind="not_found",
+        provider="zenmux",
+        texts=("no permission to access this resource",),
+    ),
 )
 
 RETRY_STATUS = (408, 409, 425, 429, 500, 502, 503, 504, 529)
