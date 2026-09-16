@@ -9,6 +9,11 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `env` on a `kind: cli` provider block: values set outright for the child process, applied
+  after `env_passthrough`, with `~` expanded and `env_deny` still outranking them. It exists so
+  two licences of one CLI can be registered side by side - the Gemini CLI keeps its login under
+  `$HOME/.gemini` and has no flag pointing elsewhere, so a second subscription needs a second
+  block with its own `HOME`. Quick add copies `env` from a template that sets it.
 - Gemini CLI as a `kind: cli` backend (template `gemini-cli`, command `gemini`, dialect
   `GeminiDialect`): the CLI signs in with a Google account, so the plan behind that account
   sets the allowance (free login 1000 requests a day, AI Pro 1500, Ultra 2000) instead of the

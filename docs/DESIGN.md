@@ -1141,3 +1141,22 @@ Activation is manual and cannot be scripted: the CLI stores the chosen auth in
 running `gemini` in a terminal and picking "Login with Google" with the subscribed account.
 Until that is done the hub's env fencing leaves the CLI with no credential at all, which is an
 auth error naming the command to run, exactly as for the other two CLIs.
+
+### A second licence: one CLI, two logins
+Allowances follow the Google account, so a second subscription on a second account doubles the
+daily budget - but only if the two logins can coexist. They cannot share a config directory:
+*verified in the installed bundle*, the CLI has no flag or environment variable for one, the
+`GEMINI_DIR` name in its code is an internal constant holding the string `.gemini`, and the path
+is resolved from the home directory. *Verified empirically*: run the CLI with a different `HOME`
+and it creates its own `.gemini` there and asks for its own auth method, leaving the first login
+untouched.
+
+So a provider block can now set environment values outright (`ProviderDef.env`), not just name
+variables to copy from the hub's own environment. Values are applied after `env_passthrough`,
+a leading `~` is expanded, and `env_deny` still outranks them - a denied name reaches the child
+from nowhere. A second licence is then a second provider block: same `command: gemini`, same
+`template: gemini-cli` so it picks up the dialect, and `env: {HOME: <its own directory>}`. The
+router treats the two as separate providers with separate daily windows and spreads across them.
+
+The one step that cannot be automated is the same as for the first licence: `HOME=<directory>
+gemini` in a terminal, then Login with Google with the second account.

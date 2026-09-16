@@ -153,13 +153,18 @@ def build_prompt(body: dict[str, Any], schema: dict[str, Any] | None = None) -> 
 def cli_env(provider: ProviderDef) -> dict[str, str]:
     """Only the listed variables minus the denied ones, plus ~/.local/bin on PATH.
 
-    `env_deny` wins over `env_passthrough`: a name on both lists does not reach the child.
-    That is how a CLI with its own login store is kept away from an ambient GITHUB_TOKEN
-    belonging to a different identity. (launchd's PATH lacks ~/.local/bin, hence the append.)
+    `env_deny` wins over both `env_passthrough` and `env`: a name it lists does not reach the
+    child whatever else asks for it. That is how a CLI with its own login store is kept away
+    from an ambient GITHUB_TOKEN belonging to a different identity. `env` then sets values
+    outright, which is what gives a second licence of the same CLI its own HOME and so its own
+    login. (launchd's PATH lacks ~/.local/bin, hence the append.)
     """
     names = provider.env_passthrough or list(CLI_DEFAULT_ENV_PASSTHROUGH)
     denied = set(provider.env_deny)
     env = {name: os.environ[name] for name in names if name not in denied and os.environ.get(name)}
+    for name, value in provider.env.items():
+        if name not in denied:
+            env[name] = os.path.expanduser(str(value))
     parts = [part for part in env.get("PATH", "").split(os.pathsep) if part]
     if str(LOCAL_BIN) not in parts:
         parts.append(str(LOCAL_BIN))

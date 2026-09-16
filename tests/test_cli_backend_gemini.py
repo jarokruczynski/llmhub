@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from llmhub.cli_backend import (
     CliRun,
     GeminiDialect,
+    cli_env,
     completion_from,
     dialect_for,
     usage_block,
@@ -103,3 +105,39 @@ def test_an_empty_answer_is_a_failure_even_on_exit_zero() -> None:
 def test_auth_hint_points_at_the_interactive_login() -> None:
     hint = GeminiDialect().auth_hint(entry_for(), classification=None)
     assert "gemini" in hint
+
+
+def test_explicit_env_sets_values_the_parent_does_not_have(monkeypatch) -> None:
+    monkeypatch.setenv("HOME", "/parent/home")
+    monkeypatch.setenv("PATH", "/usr/bin")
+    provider = ProviderDef(kind="cli", command="gemini", env={"HOME": "/second/licence"})
+    env = cli_env(provider)
+    assert env["HOME"] == "/second/licence"
+    assert "/usr/bin" in env["PATH"]
+
+
+def test_explicit_env_expands_a_leading_tilde(monkeypatch) -> None:
+    monkeypatch.setenv("HOME", "/parent/home")
+    provider = ProviderDef(kind="cli", command="gemini", env={"HOME": "~/homes/second"})
+    assert cli_env(provider)["HOME"] == str(Path("~/homes/second").expanduser())
+
+
+def test_env_deny_outranks_an_explicit_value(monkeypatch) -> None:
+    monkeypatch.setenv("HOME", "/parent/home")
+    provider = ProviderDef(
+        kind="cli",
+        command="gemini",
+        env={"GEMINI_API_KEY": "leaked", "HOME": "/second/licence"},
+        env_deny=["GEMINI_API_KEY"],
+    )
+    env = cli_env(provider)
+    assert "GEMINI_API_KEY" not in env
+    assert env["HOME"] == "/second/licence"
+
+
+def test_two_blocks_of_one_cli_keep_separate_logins(monkeypatch) -> None:
+    monkeypatch.setenv("HOME", "/parent/home")
+    first = ProviderDef(kind="cli", command="gemini")
+    second = ProviderDef(kind="cli", command="gemini", env={"HOME": "/second/licence"})
+    assert cli_env(first)["HOME"] == "/parent/home"
+    assert cli_env(second)["HOME"] == "/second/licence"

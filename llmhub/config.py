@@ -146,6 +146,12 @@ class ProviderDef(BaseModel):
     timeout_s: float | None = None
     workdir: str | None = None
     env_passthrough: list[str] = Field(default_factory=lambda: list(CLI_DEFAULT_ENV_PASSTHROUGH))
+    # Values set outright for the child, not copied from the hub's own environment, applied
+    # after the passthrough and still subject to env_deny. A leading ~ is expanded. This is how
+    # a second licence of the same CLI gets its own login: the credentials live under
+    # $HOME/.gemini and the CLI has no flag that points anywhere else, so the only way to keep
+    # two accounts apart is to hand each provider block its own HOME.
+    env: dict[str, str] = Field(default_factory=dict)
     # names the child must never see, even when env_passthrough or the parent env carries them:
     # an inherited GITHUB_TOKEN would silently pick a different identity than the CLI's login
     env_deny: list[str] = Field(default_factory=list)

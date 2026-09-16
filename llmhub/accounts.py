@@ -459,7 +459,15 @@ def provider_block(
         if not chosen:
             raise AccountError(f"provider {provider} is new: kind cli needs a command")
         block["command"] = chosen
-        for name in ("extra_args", "concurrency", "timeout_s", "workdir", "env_passthrough", "env_deny"):
+        for name in (
+            "extra_args",
+            "concurrency",
+            "timeout_s",
+            "workdir",
+            "env_passthrough",
+            "env_deny",
+            "env",
+        ):
             if known and known.get(name) is not None:
                 block[name] = known[name]
     else:
