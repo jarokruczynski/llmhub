@@ -612,8 +612,90 @@ class CopilotDialect(CliDialect):
         return f"{entry.key}: {COPILOT_LOGIN_HINT.format(command=entry.cli_command)}"
 
 
+GEMINI_LOGIN_HINT = "run `{command}` in a terminal and pick the account the plan is on"
+# read-only: the agent may look but never edit, and the empty cwd leaves nothing to look at
+GEMINI_APPROVAL_MODE = "plan"
+
+
+class GeminiDialect(CliDialect):
+    """`gemini -p ... -o json`: one JSON object, token counts nested per model under `stats`."""
+
+    id = "gemini-cli"
+    schema_in_prompt = True
+    lists_models = False
+
+    def build_args(
+        self,
+        executable: str,
+        provider: ProviderDef,
+        model: ModelDef,
+        *,
+        prompt: str,
+        timeout_s: float,
+        schema_path: Path | None = None,
+    ) -> list[str]:
+        # The workdir is empty and outside any project, so there is nothing in it to trust or
+        # distrust - but an untrusted folder makes the CLI override the approval mode back to
+        # asking a human, which never answers in a headless run.
+        args = [
+            executable,
+            "--output-format",
+            "json",
+            "--skip-trust",
+            "--approval-mode",
+            GEMINI_APPROVAL_MODE,
+        ]
+        if model.id:
+            args += ["--model", model.id]
+        args += [str(item) for item in provider.extra_args]
+        args += ["-p", prompt]
+        return args
+
+    def parse(self, stdout: str) -> dict[str, Any]:
+        payload = parse_json_object(stdout)
+        if not payload:
+            return payload
+        payload.setdefault("conversation_id", payload.get("session_id"))
+        payload["usage"] = self._usage(payload)
+        return payload
+
+    @staticmethod
+    def _usage(payload: dict[str, Any]) -> dict[str, Any]:
+        """Sum the per-model token counts the CLI reports for the run.
+
+        A single call can touch more than one model - the agent's own summariser runs on a
+        small one - and the caller is billed for the lot, so the totals are what go back.
+        """
+        stats = payload.get("stats")
+        models = stats.get("models") if isinstance(stats, dict) else None
+        totals = {"input_tokens": 0, "output_tokens": 0, "thinking_tokens": 0, "cache_read_tokens": 0}
+        if not isinstance(models, dict):
+            return totals
+        for entry in models.values():
+            tokens = entry.get("tokens") if isinstance(entry, dict) else None
+            if not isinstance(tokens, dict):
+                continue
+            for field_name, source in (
+                ("input_tokens", "prompt"),
+                ("output_tokens", "candidates"),
+                ("thinking_tokens", "thoughts"),
+                ("cache_read_tokens", "cached"),
+            ):
+                value = _number(tokens.get(source))
+                if value is not None:
+                    totals[field_name] += int(value)
+        # `total` counts thinking inside the candidates, so it is left to usage_block to add up
+        return totals
+
+    def succeeded(self, run: CliRun, payload: dict[str, Any]) -> bool:
+        return run.returncode == 0 and bool(payload.get("response"))
+
+    def auth_hint(self, entry: Entry, classification: Classification) -> str:
+        return f"{entry.key}: {GEMINI_LOGIN_HINT.format(command=entry.cli_command)}"
+
+
 DIALECTS: dict[str, CliDialect] = {
-    dialect.id: dialect for dialect in (AntigravityDialect(), CopilotDialect())
+    dialect.id: dialect for dialect in (AntigravityDialect(), CopilotDialect(), GeminiDialect())
 }
 DEFAULT_DIALECT = DIALECTS["antigravity"]
 

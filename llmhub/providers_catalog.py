@@ -29,6 +29,11 @@ EXPLABS_PROMO_FREE: dict[str, Any] = {
     "daily": {"in_tokens": 375000, "out_tokens": 75000},
 }
 
+GEMINI_CLI_MODEL_NOTE = (
+    "the allowance is shared by every model on the account and counts requests, not tokens; "
+    "each call carries the agent's own system prompt, so a short question still bills one "
+    "request and several thousand input tokens"
+)
 ANTIGRAVITY_MODEL_NOTE = (
     "free via the signed-in agy CLI; no vision and no tools (the agent runs sandboxed in an "
     "empty directory), limits unknown"
@@ -1043,6 +1048,60 @@ PROVIDER_TEMPLATES: tuple[dict[str, Any], ...] = (
                 "caps": ["text", "json", "reasoning"],
                 "free": {},
                 "notes": ANTIGRAVITY_MODEL_NOTE,
+            },
+        ],
+    },
+    {
+        # The same Google account as the API key above, reached the other way round: the CLI
+        # signs in interactively and the plan that account is on sets the ceiling, so a paid
+        # subscription is spent here as a request count rather than per token. Keeping the key
+        # out of the environment is what makes that happen - see env_deny.
+        "id": "gemini-cli",
+        "kind": "cli",
+        "base_url": "",
+        "command": "gemini",
+        "api_key_env": None,
+        "docs_url": "https://geminicli.com/docs/resources/quota-and-pricing/",
+        "aliases": ["gemini cli", "gemini-cli", "google gemini cli"],
+        "hostnames": ["geminicli.com"],
+        "fields": [],
+        # the plan meters whole requests per day, not tokens, and it turns over at midnight
+        "quota_scope_default": "daily",
+        # A key in the environment silently wins over the interactive login, and the key path
+        # is the worse deal by a wide margin: fewer requests a day and Flash models only. The
+        # Vertex switch would send the run somewhere else entirely.
+        "env_deny": [
+            "GEMINI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GOOGLE_GENAI_USE_VERTEXAI",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        ],
+        "extra_args": [],
+        "notes": "the Gemini CLI signed in with a Google account, not the API key: the daily "
+        "request allowance follows whatever plan that account is on (free login, AI Pro, "
+        "Ultra), and Pro models need a paid one. Sign in by running `gemini` in a terminal and "
+        "choosing Login with Google - there is no key to paste, and no model listing either, "
+        "so the ids below are maintained by hand. Google may use free-tier prompts, so public "
+        "data only.",
+        "models": [
+            {
+                "id": "gemini-3.8-flash",
+                "caps": ["text", "json", "reasoning"],
+                "free": {"daily": {"requests": 1500}},
+                "notes": GEMINI_CLI_MODEL_NOTE,
+            },
+            {
+                "id": "gemini-flash-latest",
+                "caps": ["text", "json", "reasoning"],
+                "free": {"daily": {"requests": 1500}},
+                "notes": GEMINI_CLI_MODEL_NOTE,
+            },
+            {
+                "id": "gemini-pro-latest",
+                "caps": ["text", "json", "reasoning"],
+                "free": {"daily": {"requests": 1500}},
+                "notes": "Pro is a paid-plan model: a free login answers 429 for it. Otherwise "
+                + GEMINI_CLI_MODEL_NOTE,
             },
         ],
     },

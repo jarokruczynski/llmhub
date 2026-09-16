@@ -9,6 +9,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Gemini CLI as a `kind: cli` backend (template `gemini-cli`, command `gemini`, dialect
+  `GeminiDialect`): the CLI signs in with a Google account, so the plan behind that account
+  sets the allowance (free login 1000 requests a day, AI Pro 1500, Ultra 2000) instead of the
+  API key's 250-a-day Flash-only tier. Read-only (`--approval-mode plan`), `--skip-trust` so an
+  untrusted empty workdir cannot force the mode back to asking a human, and `env_deny` for
+  `GEMINI_API_KEY` / `GOOGLE_API_KEY` / `GOOGLE_APPLICATION_CREDENTIALS` /
+  `GOOGLE_GENAI_USE_VERTEXAI` so a stray key cannot outrank the login. Token counts are summed
+  across every model a run touched. Sign in with `gemini` in a terminal before adding the
+  account; there is no key to paste.
 - Owner kill switch for calls in flight: `POST api/live/{call_id}/cancel` and
   `POST api/live/cancel` with `{"app": "..."}` or `{"all": true}`. The vendor call is cancelled
   (an http request closed, a CLI process group killed), the concurrency slot freed, and a

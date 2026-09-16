@@ -1093,3 +1093,51 @@ pair (`TIMEOUT_STRIKES`) park it as `unavailable` with code `timeouts` for the u
 and an event of that kind; any answer resets the count. A backend that never answers looks
 healthy to everything else in the pool, so it keeps being handed callers - three deadlines is
 enough evidence.
+
+## Gemini CLI - a subscription reached as a request count
+The Gemini CLI (`gemini`, npm `@google/gemini-cli`) has a headless mode, so it fits `kind: cli`
+as a third dialect. The point of registering it is that the CLI signs in with a Google account
+rather than an API key, and the account's plan sets the allowance: a free login gets 1000
+requests a day, Google AI Pro 1500, Ultra 2000, and since 2026-03-25 Pro models need a paid
+plan. The same account's API key is the worse deal by a wide margin - 250 requests a day, Flash
+only - so which credential the process sees decides what the run is worth.
+
+Argv: `gemini --output-format json --skip-trust --approval-mode plan --model <id> -p <prompt>`.
+Three of those flags are load-bearing.
+
+1. `--approval-mode plan` is read-only: the agent may look, never edit or run commands. It is
+   this dialect's answer to antigravity's `--sandbox` and Copilot's tool fencing.
+2. `--skip-trust` is required *because of* the point above. The workdir is an empty per-provider
+   directory with nothing in it to trust, but an untrusted folder makes the CLI override the
+   approval mode back to asking a human, which never answers in a headless run and exits 55.
+3. `-p` last, so a prompt that begins with a dash cannot be read as a flag.
+
+`env_deny` carries `GEMINI_API_KEY`, `GOOGLE_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS` and
+`GOOGLE_GENAI_USE_VERTEXAI`. A key in the environment silently wins over the interactive login,
+which would spend the cheap allowance while the subscription sits unused, and the Vertex switch
+would send the call to a different billing account altogether.
+
+Output is a single JSON object: `{session_id, response, stats: {models: {<id>: {tokens: {input,
+prompt, candidates, total, cached, thoughts, tool}}}}}`. Token counts are **per model and there
+can be several** in one run - the agent's own summariser uses a smaller model - so the dialect
+sums them onto the hub's field names (`prompt` -> input, `candidates` -> output, `thoughts` ->
+thinking, `cached` -> cache read) rather than reading the first entry. The CLI's own `total`
+is not used: it counts thinking inside the candidates, and `usage_block` adds up its own.
+`session_id` becomes `conversation_id`. Warnings about skills, colour support and ripgrep go to
+stderr, and `parse_json_object` skips any that leak into stdout.
+
+No `models` subcommand, so `lists_models = False` and the ids come from the template by hand.
+No `--json-schema` either: `schema_in_prompt = True` puts the schema in the prompt instead.
+Success is exit 0 **and** a non-empty `response`; exit 0 with no answer means the output shape
+moved. Quota scope is daily: the plan meters whole requests and turns over at midnight.
+
+Live probe 2026-09-16 with the real CLI: "Reply with the single word OK." answered in one call
+for 11468 input, 1 output and 309 thinking tokens. The agent system prompt plus the owner's
+skills cost ~11k input tokens on the shortest possible question - irrelevant to the allowance,
+which counts requests, but worth knowing before sending a batch through here.
+
+Activation is manual and cannot be scripted: the CLI stores the chosen auth in
+`~/.gemini/settings.json`, and switching it from `gemini-api-key` to a Google login means
+running `gemini` in a terminal and picking "Login with Google" with the subscribed account.
+Until that is done the hub's env fencing leaves the CLI with no credential at all, which is an
+auth error naming the command to run, exactly as for the other two CLIs.
