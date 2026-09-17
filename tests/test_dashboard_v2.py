@@ -94,3 +94,29 @@ async def test_health_sweep_endpoint(client: httpx.AsyncClient) -> None:
     assert res_status.status_code == 200
     status_data = res_status.json()
     assert status_data["last_sweep_at"] is not None
+
+
+async def test_baselines_are_served_with_their_provenance(client: httpx.AsyncClient) -> None:
+    res = await client.get("/api/baselines")
+    assert res.status_code == 200
+    body = res.json()
+
+    assert body["currency"] == "USD"
+    assert body["as_of"]
+    assert body["default"] in {item["id"] for item in body["baselines"]}
+    for item in body["baselines"]:
+        assert item["source"].startswith("https://")
+        assert item["cached"] < item["input"] < item["output"]
+
+    tier = body["tier_matched"]
+    known = {item["id"] for item in body["baselines"]}
+    assert tier["small"] in known and tier["large"] in known
+    assert tier["markers"]
+
+
+async def test_the_dashboard_carries_no_prices_of_its_own(client: httpx.AsyncClient) -> None:
+    script = await client.get("/static/v2/v2.js")
+    page = await client.get("/v2")
+
+    assert "BASELINES" not in script.text
+    assert "GPT-4o" not in page.text

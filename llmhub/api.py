@@ -27,6 +27,7 @@ from .accounts import (
     resolve_source,
 )
 from .auth import is_loopback, require_token
+from .baselines import catalog as baseline_catalog
 from .cli_backend import PROBE_PROMPT, CliRequestError, discover_cli_models
 from .config import CLI_KIND
 from .health import last_sweep, sweep_once
@@ -1305,6 +1306,12 @@ async def run_health_sweep(request: Request) -> dict[str, Any]:
     """Probe every eligible account now. The schedule skips the ones traffic already proved."""
     require_token(request)
     return {**await sweep_once(hub_of(request)), **lan_warning(request)}
+
+
+@router.get("/baselines")
+async def baselines(request: Request) -> dict[str, Any]:
+    """Published list prices the savings estimate compares against, with the date they were read."""
+    return baseline_catalog()
 
 
 @router.get("/health/status")

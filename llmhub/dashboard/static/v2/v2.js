@@ -6,37 +6,13 @@
 (function () {
   'use strict';
 
-  // --- Baseline Pricing Definitions (per 1M tokens) ---
-  const BASELINES = {
-    gpt4o: {
-      name: 'OpenAI GPT-4o',
-      priceIn: 2.50,
-      priceCached: 1.25,
-      priceOut: 10.00,
-      desc: 'Calculated against <strong>OpenAI GPT-4o standard baseline</strong> ($2.50/1M in, $1.25/1M cached, $10.00/1M out).'
-    },
-    claude_sonnet: {
-      name: 'Claude 3.5 Sonnet',
-      priceIn: 3.00,
-      priceCached: 0.30,
-      priceOut: 15.00,
-      desc: 'Calculated against <strong>Anthropic Claude 3.5 Sonnet baseline</strong> ($3.00/1M in, $0.30/1M cached, $15.00/1M out).'
-    },
-    gpt4o_mini: {
-      name: 'GPT-4o-mini',
-      priceIn: 0.15,
-      priceCached: 0.075,
-      priceOut: 0.60,
-      desc: 'Calculated against <strong>OpenAI GPT-4o-mini baseline</strong> ($0.15/1M in, $0.075/1M cached, $0.60/1M out).'
-    },
-    tier_matched: {
-      name: 'Tier-Matched Equivalent',
-      desc: 'Calculated using <strong>Tier-Matched baselines</strong> (mini/flash/8b models matched to $0.15/$0.60, flagship/large models matched to $2.50/$10.00).'
-    }
-  };
+  // Baseline prices are served by the hub (GET api/baselines) rather than written here:
+  // one table, with the date it was read off each vendor's pricing page and a link to it.
+  // Until it arrives there is no baseline, and a cost is shown as unknown rather than guessed.
 
   // --- State ---
   const state = {
+    baselines: null,
     token: localStorage.getItem('llmhub_token') || '',
     activeTab: 'overview',
     theme: localStorage.getItem('llmhub_theme') || 'dark',
@@ -46,7 +22,7 @@
     apps: [],
     usageModelRows: [],
     usagePeriod: 'all',
-    savingsBaseline: 'gpt4o',
+    savingsBaseline: null,
     usageSearch: '',
     jobs: [],
     queueDepth: {},
@@ -253,6 +229,52 @@
   }
 
   // --- Data Fetching ---
+  function baselineById(id) {
+    return (state.baselines?.baselines || []).find((b) => b.id === id) || null;
+  }
+
+  function priceFor(modelName, baselineKey) {
+    const table = state.baselines;
+    if (!table) return null;
+    const tier = table.tier_matched;
+    if (tier && baselineKey === tier.id) {
+      const name = (modelName || '').toLowerCase();
+      const small = (tier.markers || []).some((marker) => name.includes(marker));
+      return baselineById(small ? tier.small : tier.large);
+    }
+    return baselineById(baselineKey) || baselineById(table.default);
+  }
+
+  async function loadBaselines() {
+    try {
+      const res = await api('api/baselines');
+      if (res.ok) {
+        state.baselines = await res.json();
+        populateBaselineOptions();
+      }
+    } catch (e) {
+      console.error('Error loading baselines:', e);
+    }
+  }
+
+  function populateBaselineOptions() {
+    const select = document.getElementById('savings-baseline-select');
+    const table = state.baselines;
+    if (!select || !table) return;
+    const known = new Set((table.baselines || []).map((b) => b.id));
+    if (table.tier_matched) known.add(table.tier_matched.id);
+    const chosen = known.has(state.savingsBaseline) ? state.savingsBaseline : table.default;
+    const options = (table.baselines || []).map(
+      (b) => `<option value="${b.id}">${b.label} ($${b.input} / $${b.output})</option>`
+    );
+    if (table.tier_matched) {
+      options.push(`<option value="${table.tier_matched.id}">${table.tier_matched.label}</option>`);
+    }
+    select.innerHTML = options.join('');
+    select.value = chosen;
+    state.savingsBaseline = select.value;
+  }
+
   async function loadStatus() {
     try {
       const res = await api('api/status');
@@ -366,6 +388,7 @@
     const btn = document.getElementById('refresh-btn');
     if (btn) btn.classList.add('spinning');
     await Promise.all([
+      loadBaselines(),
       loadStatus(),
       loadLive(),
       loadUsage(),
@@ -379,6 +402,7 @@
 
   // --- Polling Loops ---
   function startPolling() {
+    loadBaselines();
     loadStatus();
     loadLive();
     loadUsage();
@@ -1842,23 +1866,10 @@
     const regularIn = Math.max(0, inTokens - cachedTokens);
     const outTokens = r.out_tokens || 0;
 
-    let pIn = 2.50, pCached = 1.25, pOut = 10.00;
-    if (baselineKey === 'tier_matched') {
-      const m = (r.model || r.bucket || '').toLowerCase();
-      const isMini = m.includes('flash') || m.includes('mini') || m.includes('8b') || m.includes('haiku') || m.includes('small');
-      if (isMini) {
-        pIn = 0.15; pCached = 0.075; pOut = 0.60;
-      } else {
-        pIn = 2.50; pCached = 1.25; pOut = 10.00;
-      }
-    } else {
-      const b = BASELINES[baselineKey] || BASELINES.gpt4o;
-      pIn = b.priceIn;
-      pCached = b.priceCached;
-      pOut = b.priceOut;
-    }
+    const price = priceFor(r.model || r.bucket || '', baselineKey);
+    if (!price) return null;
 
-    return ((regularIn * pIn) + (cachedTokens * pCached) + (outTokens * pOut)) / 1000000;
+    return ((regularIn * price.input) + (cachedTokens * price.cached) + (outTokens * price.output)) / 1000000;
   }
 
   function renderUsage() {
@@ -1879,6 +1890,8 @@
     let totalOut = 0;
     let totalReqs = 0;
     let totalCost = 0;
+    // null means no baseline table arrived: the cost is unknown, which is not the same as zero
+    let costKnown = true;
 
     rows = rows.map(r => {
       const modelName = r.model || r.bucket || 'unknown';
@@ -1893,7 +1906,11 @@
       totalCached += cachedTok;
       totalOut += outTok;
       totalReqs += reqs;
-      totalCost += cost;
+      if (cost === null) {
+        costKnown = false;
+      } else {
+        totalCost += cost;
+      }
 
       return {
         ...r,
@@ -1910,12 +1927,31 @@
     // Update headline savings
     const headlineEl = document.getElementById('savings-headline-amount');
     if (headlineEl) {
-      headlineEl.textContent = `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+      headlineEl.textContent = costKnown
+        ? `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+        : '-';
     }
 
     const descEl = document.getElementById('savings-baseline-description');
     if (descEl) {
-      descEl.innerHTML = BASELINES[state.savingsBaseline]?.desc || BASELINES.gpt4o.desc;
+      const table = state.baselines;
+      if (!table) {
+        descEl.textContent = 'Baseline prices unavailable, so no cost is estimated.';
+      } else if (state.savingsBaseline === table.tier_matched?.id) {
+        const small = baselineById(table.tier_matched.small);
+        const large = baselineById(table.tier_matched.large);
+        descEl.innerHTML =
+          `Small models priced as <strong>${small?.label || table.tier_matched.small}</strong>, ` +
+          `the rest as <strong>${large?.label || table.tier_matched.large}</strong>. ` +
+          `List prices read ${table.as_of}.`;
+      } else {
+        const b = baselineById(state.savingsBaseline) || baselineById(table.default);
+        descEl.innerHTML = b
+          ? `Priced as <strong>${b.label}</strong> ($${b.input}/1M in, $${b.cached}/1M cached, ` +
+            `$${b.output}/1M out), ${b.vendor} list prices read ${table.as_of} ` +
+            `(<a href="${b.source}" target="_blank" rel="noopener">source</a>).`
+          : 'Baseline prices unavailable, so no cost is estimated.';
+      }
     }
 
     if (rows.length === 0) {
@@ -1958,7 +1994,7 @@
               <td style="font-weight:600">${formatTokens(r.total_tokens)}</td>
               <td>${formatNumber(r.requests)}</td>
               <td style="font-weight:700; color:var(--status-ready)">
-                $${r.est_cost < 0.01 && r.est_cost > 0 ? r.est_cost.toFixed(4) : r.est_cost.toFixed(2)}
+                ${r.est_cost === null ? '-' : `$${r.est_cost < 0.01 && r.est_cost > 0 ? r.est_cost.toFixed(4) : r.est_cost.toFixed(2)}`}
               </td>
             </tr>
           `).join('')}

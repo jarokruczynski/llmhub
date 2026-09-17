@@ -9,6 +9,12 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- `GET api/baselines` and `llmhub/baselines.py`: the list prices the savings estimate compares
+  against, per million tokens, with the vendor's own pricing page linked and the date they were
+  read (`AS_OF`). The dashboard fetches them instead of carrying its own copy - the prices there
+  were hardcoded with no date or source and had fallen a model generation behind. Cached input
+  is priced at its own rate, tier matching keeps a small model from being priced as a flagship,
+  and a missing table shows a dash rather than `$0.00`.
 - The account health sweep runs on a schedule (`llmhub/health.py`, `health_sweep_every_h`, env
   `LLMHUB_HEALTH_SWEEP_EVERY_H`, default 6 hours, `0` disables). It was manual only, and its
   summary lived in a module-level variable that died with the process; a row per sweep now goes

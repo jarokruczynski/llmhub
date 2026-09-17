@@ -1194,3 +1194,27 @@ timeout stretches the whole run.
 eligible account: someone asking for a check now means all of them. The schedule passes the
 configured window. Both paths are the same function.
 
+## Baseline prices - what "saved" is measured against
+The hub routes free models, so a savings figure only means something against a named
+comparison. `llmhub/baselines.py` is that comparison and the only place prices live: published
+list prices per million tokens in USD, read off each vendor's own pricing page on `AS_OF`, with
+the page linked per entry. `GET api/baselines` serves the table and the dashboard fetches it.
+
+They started out inside the dashboard script with no date and no source, which is how a number
+goes quietly stale while still looking precise - the figures there were a model generation
+behind by the time anyone read them. Refreshing prices now means editing one module and moving
+`AS_OF` in the same commit.
+
+Three rules the estimate follows, because an inflated one is worse than none:
+
+- **Cached input is priced separately.** All three vendors bill it far below fresh input, so
+  charging it at the input rate would invent savings out of a caching discount.
+- **Tier matching exists** so a small model is not priced as a flagship. `TIER_MATCHED` names a
+  small baseline, a mid-tier one, and the markers vendors use for their own small tiers
+  (flash, mini, lite, nano, haiku, and the small parameter counts).
+- **No table, no number.** If the fetch fails the dashboard shows a dash, never `$0.00`: an
+  unknown cost is not a free one.
+
+Nothing is fetched at runtime. Prices change and promotional rates expire, so the figure is an
+estimate against a stated date, and the page says so next to the number.
+
