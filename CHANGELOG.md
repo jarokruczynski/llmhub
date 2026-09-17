@@ -9,6 +9,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- The account health sweep runs on a schedule (`llmhub/health.py`, `health_sweep_every_h`, env
+  `LLMHUB_HEALTH_SWEEP_EVERY_H`, default 6 hours, `0` disables). It was manual only, and its
+  summary lived in a module-level variable that died with the process; a row per sweep now goes
+  to `health_sweeps`, so `GET api/health/status` survives a restart and reports the schedule and
+  the next run. The clock counts from the last recorded sweep, so restarting neither re-probes
+  everything nor postpones the next sweep. A probe costs one request against a free allowance,
+  so the scheduled run skips accounts real traffic already proved inside the window
+  (`recently_served`) and pairs whose concurrency slot is busy (`in_use`), and each probe is
+  bounded at 60 s so one slow CLI backend cannot stretch the run.
 - `env` on a `kind: cli` provider block: values set outright for the child process, applied
   after `env_passthrough`, with `~` expanded and `env_deny` still outranking them. It exists so
   two licences of one CLI can be registered side by side - the Gemini CLI keeps its login under

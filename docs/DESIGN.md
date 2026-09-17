@@ -1160,3 +1160,37 @@ router treats the two as separate providers with separate daily windows and spre
 
 The one step that cannot be automated is the same as for the first licence: `HOME=<directory>
 gemini` in a terminal, then Login with Google with the second account.
+
+## Health sweep - periodic proof that an idle account still works
+Real traffic answers this for the accounts it touches: a served call writes a usage row and the
+accounts view reads the newest one per account. It cannot answer it for an account nothing has
+called lately - a key revoked, a plan changed, a login expired - and that only surfaces when
+something needs the account and fails. `llmhub/health.py` probes exactly those on a schedule.
+
+`HealthSweepService` starts and stops with the app, like the scout. `health_sweep_every_h`
+(env `LLMHUB_HEALTH_SWEEP_EVERY_H`, default 6, `0` turns it off) is both the interval and the
+window traffic counts for. **The clock is the last recorded sweep, not process start**, so a
+restart neither re-probes everything nor postpones the next one forever - a row per sweep lives
+in `health_sweeps`, which is also what `GET api/health/status` reports, so the summary survives
+a restart instead of dying with a module-level variable.
+
+Cost is the whole design. A probe is one request against a free allowance, and some allowances
+count whole requests rather than tokens, so the sweep buys nothing where the answer already
+exists and skips:
+
+- `recently_served` - a call this account served inside the window. Traffic is the proof.
+- `in_use` - the pair's concurrency slot is held right now. Someone is using it, which answers
+  the same question, and waiting for the slot would queue the sweep behind a job that can run
+  for minutes. Found the hard way: the first live sweep sat behind a 600 s CLI job.
+- `exhausted`, `parked_unavailable`, `disabled`, `missing_api_key`, `no_eligible_free_model` -
+  nothing to learn, or nothing that could answer.
+
+What is left is at most one probe per idle account per window, one account at a time. Each probe
+is bounded by `PROBE_TIMEOUT_S` (60 s) and a backend that does not answer inside it is recorded
+as a `timeout` and the sweep moves on; without that, one CLI backend on its own 600 s print
+timeout stretches the whole run.
+
+`POST api/health/sweep` is the manual button and passes a zero window, so it probes every
+eligible account: someone asking for a check now means all of them. The schedule passes the
+configured window. Both paths are the same function.
+

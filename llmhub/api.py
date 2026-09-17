@@ -29,6 +29,7 @@ from .accounts import (
 from .auth import is_loopback, require_token
 from .cli_backend import PROBE_PROMPT, CliRequestError, discover_cli_models
 from .config import CLI_KIND
+from .health import last_sweep, sweep_once
 from .promo_identity import (
     duplicate_groups,
     hosts_of,
@@ -1299,107 +1300,21 @@ async def test_account(
     return {**base, **await probe_entry(hub, entry, payload.prompt)}
 
 
-class HealthSweepState:
-    last_sweep_at: str | None = None
-    last_results: list[dict[str, Any]] = []
-    last_probed: int = 0
-    last_skipped: int = 0
-
-
-_HEALTH_SWEEP = HealthSweepState()
-
-
 @router.post("/health/sweep")
 async def run_health_sweep(request: Request) -> dict[str, Any]:
+    """Probe every eligible account now. The schedule skips the ones traffic already proved."""
     require_token(request)
-    hub = hub_of(request)
-    now = datetime.now(UTC)
-    disabled = hub.store.disabled_models()
-    unavailable_all = hub.store.unavailable_all(now)
-
-    results: list[dict[str, Any]] = []
-    skipped: list[dict[str, Any]] = []
-
-    for provider_name, provider in hub.registry.providers.items():
-        for account in provider.accounts:
-            candidate_entry = None
-            skip_reason = None
-
-            if account.api_key_env and not os.environ.get(account.api_key_env):
-                skip_reason = "missing_api_key"
-            else:
-                for model in provider.models:
-                    if not model.is_free:
-                        continue
-                    entry = hub.registry.entry(f"{provider_name}/{model.id}", account.id)
-                    if entry is None:
-                        continue
-                    if entry.key in disabled:
-                        skip_reason = "disabled"
-                        continue
-                    if entry.key in unavailable_all:
-                        skip_reason = "parked_unavailable"
-                        continue
-                    room = hub.quota.room(entry, now)
-                    if room["remaining_out"] == 0 or room["remaining_requests"] == 0:
-                        skip_reason = "exhausted"
-                        continue
-                    candidate_entry = entry
-                    break
-
-            if candidate_entry is None:
-                skipped.append(
-                    {
-                        "provider": provider_name,
-                        "account": account.id,
-                        "reason": skip_reason or "no_eligible_free_model",
-                    }
-                )
-                continue
-
-            probe_res = await probe_entry(hub, candidate_entry)
-            status_str = "ok" if probe_res.get("ok") else probe_res.get("status", "error")
-            results.append(
-                {
-                    "provider": provider_name,
-                    "account": account.id,
-                    "model": candidate_entry.key,
-                    "ok": probe_res.get("ok", False),
-                    "status": status_str,
-                    "latency_ms": probe_res.get("latency_ms", 0),
-                    "error": probe_res.get("error"),
-                }
-            )
-
-    ts = to_iso(now)
-    _HEALTH_SWEEP.last_sweep_at = ts
-    _HEALTH_SWEEP.last_results = results
-    _HEALTH_SWEEP.last_probed = len(results)
-    _HEALTH_SWEEP.last_skipped = len(skipped)
-
-    hub.store.add_event(
-        kind="health_sweep",
-        message=f"health sweep: probed {len(results)} accounts, skipped {len(skipped)}",
-    )
-
-    return {
-        "timestamp": ts,
-        "probed_count": len(results),
-        "skipped_count": len(skipped),
-        "request_cost": len(results),
-        "results": results,
-        "skipped": skipped,
-        **lan_warning(request),
-    }
+    return {**await sweep_once(hub_of(request)), **lan_warning(request)}
 
 
 @router.get("/health/status")
 async def health_sweep_status(request: Request) -> dict[str, Any]:
+    hub = hub_of(request)
+    service = hub.health
     return {
-        "last_sweep_at": _HEALTH_SWEEP.last_sweep_at,
-        "probed_count": _HEALTH_SWEEP.last_probed,
-        "skipped_count": _HEALTH_SWEEP.last_skipped,
-        "results": _HEALTH_SWEEP.last_results,
+        **last_sweep(hub),
+        "every_h": getattr(service, "every_h", 0),
+        "next_run_at": service.next_run_at() if service is not None else None,
     }
 
 

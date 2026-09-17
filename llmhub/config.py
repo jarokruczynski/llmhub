@@ -402,6 +402,9 @@ class Settings:
     # most of them, so without a ceiling one request writes a usage row per dead pair while
     # the caller waits out the whole budget.
     max_attempts: int = 16
+    # hours between health sweeps, and the same window real traffic counts for: an account
+    # served inside it is proven already and is not probed. 0 turns the schedule off.
+    health_sweep_every_h: int = 6
     # the scout talks to the hub through its own OpenAI wire, so it goes through the same
     # routing, quota accounting and free-only policy as any other client
     hub_base_url: str = "http://127.0.0.1:8800/v1"
@@ -442,6 +445,7 @@ class Settings:
             unavailable_ttl_s=_positive_int(env, "LLMHUB_UNAVAILABLE_TTL_S", 600),
             run_budget_s=_positive_int(env, "LLMHUB_RUN_BUDGET_S", 90),
             max_attempts=_positive_int(env, "LLMHUB_MAX_ATTEMPTS", 16),
+            health_sweep_every_h=_non_negative_int(env, "LLMHUB_HEALTH_SWEEP_EVERY_H", 6),
             hub_base_url=env.get("LLMHUB_BASE_URL", "http://127.0.0.1:8800/v1").rstrip("/"),
             scout_at=scout_at or None,
             scout_sources_path=Path(scout_sources) if scout_sources else None,

@@ -39,6 +39,7 @@ class Hub:
         self.client = client or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, follow_redirects=False)
         self.jobs: Any = None
         self.scout: Any = None
+        self.health: Any = None
 
     @classmethod
     def create(cls, settings: Settings, client: httpx.AsyncClient | None = None) -> Hub:

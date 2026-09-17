@@ -21,6 +21,15 @@ DEFAULT_JOB_TTL_S = 6 * 3600
 
 TABLES = (
     """
+    CREATE TABLE IF NOT EXISTS health_sweeps (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        probed INTEGER NOT NULL DEFAULT 0,
+        skipped INTEGER NOT NULL DEFAULT 0,
+        results TEXT NOT NULL DEFAULT '[]'
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS usage (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts TEXT NOT NULL,
@@ -1307,6 +1316,18 @@ class Store:
             (since,),
         )
         return int(row["n"]) if row else 0
+
+    def record_health_sweep(
+        self, *, ts: str, probed: int, skipped: int, results: list[dict[str, Any]]
+    ) -> None:
+        """One row per sweep: the summary the API reports, kept across restarts."""
+        self.execute(
+            "INSERT INTO health_sweeps (ts, probed, skipped, results) VALUES (?, ?, ?, ?)",
+            (ts, int(probed), int(skipped), json.dumps(results)),
+        )
+
+    def last_health_sweep(self) -> dict[str, Any] | None:
+        return self.query_one("SELECT * FROM health_sweeps ORDER BY id DESC LIMIT 1")
 
     def purge_events(self, before: str, kinds: tuple[str, ...]) -> int:
         """Per-attempt chatter is diagnostic only: useful for hours, dead weight for weeks.
