@@ -385,7 +385,9 @@ def test_no_balance_403_is_not_found_not_auth(text: str) -> None:
 
 
 def test_zenmux_payg_only_permission_error_is_not_found() -> None:
-    body = json.dumps({"error": {"message": "You have no permission to access this resource (api_key_source: payg)"}})
+    body = json.dumps(
+        {"error": {"message": "You have no permission to access this resource (api_key_source: payg)"}}
+    )
     result = classify(403, body, "zenmux")
     assert result.kind == "not_found"
     assert result.rule == "zenmux-payg-only"
