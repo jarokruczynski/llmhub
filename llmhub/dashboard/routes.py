@@ -30,13 +30,18 @@ async def dashboard_index(request: Request) -> HTMLResponse:
 
 @router.get("/v2", include_in_schema=False)
 @router.get("/v2/", include_in_schema=False)
-async def dashboard_v2_redirect() -> RedirectResponse:
+async def dashboard_v2_redirect(request: Request) -> RedirectResponse:
     """Where the console used to live while the classic one held the root.
 
-    The target is relative on purpose: from /v2/ it lands on /, and from /hub/v2/ behind the
-    LAN proxy it lands on /hub/, which an absolute "/" would miss.
+    Relative on purpose: behind the LAN proxy the console is mounted under /hub, and an
+    absolute "/" would drop that prefix and land on the machine's home page instead.
+
+    How far up depends on the trailing slash, because that is what the browser resolves
+    against: /hub/v2/ resolves against itself, but /hub/v2 resolves against /hub/, where "../"
+    is already one level too high.
     """
-    return RedirectResponse(url="../", status_code=308)
+    target = "../" if request.url.path.endswith("/") else "./"
+    return RedirectResponse(url=target, status_code=308)
 
 
 @router.get("/v2/static/{path:path}", include_in_schema=False)

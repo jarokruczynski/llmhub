@@ -9,10 +9,13 @@ async def test_the_console_is_served_at_the_root(client: httpx.AsyncClient) -> N
     assert "text/html" in res_root.headers.get("content-type", "")
     assert "LLMHub Studio v2" in res_root.text
 
-    # the old address keeps working, relative so it survives the /hub prefix on the LAN
-    moved = await client.get("/v2", follow_redirects=False)
-    assert moved.status_code == 308
-    assert moved.headers["location"] == "../"
+    # the old address keeps working, relative so it survives the /hub prefix on the LAN.
+    # How far up depends on the trailing slash: the browser resolves /hub/v2 against /hub/,
+    # where "../" would already be one level too high and land on the machine's home page.
+    for path, target in (("/v2", "./"), ("/v2/", "../")):
+        moved = await client.get(path, follow_redirects=False)
+        assert moved.status_code == 308, path
+        assert moved.headers["location"] == target, path
 
     res_v2 = await client.get("/v2", follow_redirects=True)
     assert res_v2.status_code == 200
