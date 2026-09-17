@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.5.0] - 2026-09-17
 
 ### Removed
 
@@ -338,4 +338,5 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 - Dashboard table layout for the Promos, Events and Models tabs.
 
+[0.5.0]: https://github.com/jarokruczynski/llmhub/releases/tag/v0.5.0
 [0.4.0]: https://github.com/jarokruczynski/llmhub/releases/tag/v0.4.0

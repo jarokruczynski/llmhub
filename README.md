@@ -424,61 +424,33 @@ falls back to a built-in tag stripper.
 
 ## Dashboard tabs
 
-- **Models** - every (provider, model, account): status, remaining quota per window with
-  reset countdown, today's usage and last-used time, latency, last error,
-  forgive/disable/enable. Every column header sorts (click again to flip, a third click goes
-  back to registry order); filter by status, caps, provider and free text, plus "in use now",
-  "used today" and "only non-ok" toggles. Filters and sort persist in the browser. The Apps
-  column shows a live chip per in-flight call - which app, for how long - ahead of the muted
-  recent-app chips, joined against the same live feed as the strip above the tabs.
-- **Usage** - tokens and requests by app, by model, by day, plus a timeseries chart.
-- **Queue** - job counts by state, per-app pause/resume, per-job rows with cancel.
-- **Accounts** - provider accounts, Quick add, add/rotate/remove a key, discover models.
-- **Promos** - watchlist of free-tier leads with Add key, and the Scout box: last run,
-  counts, models used, Run now, link to the report. Filter by status, source and free
-  text, sort by any column; "hide used, expired, rejected" is on by default. Filters and
-  sort persist in the browser. Reject drops a lead with a written reason and Reopen takes
-  it back; the reason is shown on the row and handed to the scout and the promo-hunt skill
-  as a rule, so the same and similar offers are not proposed again.
-- **Events** - recent errors, quota hits and fallbacks, filterable by kind/app/model.
-- **Live strip** (above the tabs, on every tab) - one row per app with a call running or
-  recent activity: a highlighted chip per in-flight call with its elapsed time ticking, muted
-  chips with call counts for what the app used in the last 15 minutes. Polls every 2 s while
-  the tab is visible, 10 s when nothing is in flight. A call still queued for a concurrency
-  slot is shown muted and labelled `waiting`; every chip has an x that cancels the call
-  (vendor call included), and an app with several calls in flight gets a "kill N" button.
+One console, served at the root of wherever the hub is mounted: `http://127.0.0.1:8800/` on the
+machine itself, `http://<host>/hub/` behind a proxy that strips a prefix. Nine tabs. Lists offer
+a dense table or a card layout and remember which you picked, per list, in the browser; table
+headers sort on click without dropping an active filter.
 
-| Models - filters and sortable headers | Usage |
-| --- | --- |
-| ![Models tab with the filter bar and a live in-flight chip](docs/ui/models-filter-1440.png) | ![Usage tab](docs/ui/fullwidth-usage-1440.png) |
-
-| Queue | Accounts - Quick add |
-| --- | --- |
-| ![Queue tab](docs/ui/fullwidth-queue-1440.png) | ![Accounts Quick add](docs/ui/quickadd-accounts-success.png) |
-
-| Promos - Add key | Scout box |
-| --- | --- |
-| ![Promos Add key](docs/ui/quickadd-promo-row.png) | ![Scout box on the Promos tab](docs/ui/scout-mobile-390.png) |
-
-| Promos - filters and sort | Promos on a phone |
-| --- | --- |
-| ![Promos filter bar and sortable headers](docs/ui/promos-filter-1440.png) | ![Promos filters at phone width](docs/ui/promos-filter-390.png) |
-
-| Promos - reject with a reason | Reject form on a phone |
-| --- | --- |
-| ![Reject form open and rejected rows with their reasons](docs/ui/promos-reject-1440.png) | ![Reject form at phone width](docs/ui/promos-reject-390.png) |
-
-| Live strip and the Models apps column | Live strip on a phone |
-| --- | --- |
-| ![Live strip above the tabs with in-flight and recent chips](docs/ui/live-strip-1440.png) | ![Live strip at phone width](docs/ui/live-strip-390.png) |
-
-| Waiting chips and the kill switch | The same at phone width |
-| --- | --- |
-| ![Live strip with a queued call, an x on every chip and a kill button per app](docs/ui/live-kill-1440.png) | ![Waiting chip and kill buttons at phone width](docs/ui/live-kill-390.png) |
-
-| Events - filtered | Mobile (Models tab) |
-| --- | --- |
-| ![Events filter](docs/ui/events-filter-default-1440.png) | ![Models tab filter bar on a phone-width screen](docs/ui/models-filter-390.png) |
+- **Dashboard** - the summary: how many models are ready, what the queue looks like, and the
+  live activity feed. Every call in flight shows its app, model and state (waiting for a
+  concurrency slot, or running against the vendor) with a button that cancels it.
+- **Playground LIVE** - send a prompt through the hub by alias or by model, watch it stream,
+  and see which model actually answered.
+- **Models Fleet** - every (provider, model, account): status, each quota window with its used
+  and its reset countdown, today's usage, latency, and the last failure with how long ago it
+  was. A failure is shown only while it is the newest thing on record - a later success retires
+  it. Per row: forgive a cooldown, probe the pair, disable or re-enable it.
+- **Routing & Matrix** - the routing aliases, which are the profiles a client asks for by name
+  (`"model": "auto"`): a preference order plus a spread that decides how widely the traffic is
+  fanned out. Editable here, validated against the live registry, and a simulator that shows
+  which model a request would land on.
+- **Queue & Jobs** - job counts by state, per-app pause and resume, per-job cancel.
+- **Accounts** - the provider accounts, Quick add for a new one, key rotation and removal,
+  model discovery, and when each account was last verified.
+- **Promos & Scout** - the watchlist of free-tier leads with filters by status, vendor and free
+  text, plus the scout: last run, what it found, and Run now.
+- **Usage & Savings** - tokens per model over a selectable period, and what the same traffic
+  would have cost on a paid vendor. The baseline is named on the page along with the date its
+  prices were read, because a figure without either is not worth reading.
+- **Events Log** - recent errors, quota hits and fallbacks, filterable by kind, app and model.
 
 ## Running as a service
 
