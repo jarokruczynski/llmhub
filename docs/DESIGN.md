@@ -1241,6 +1241,13 @@ body, the candidate it was sent to and the result, for HTTP, streaming and CLI b
 It is a no-op when the recorder is off and it swallows its own errors: a debugging aid that can
 break a served request is worse than no aid.
 
+Both outcomes are recorded. A refused attempt raises out of the backend rather than returning,
+so hooking only the success path produced the one failure mode that matters here: a recorder
+armed during a quota storm, reporting that nothing had gone through the hub while hundreds of
+calls were being turned away. A refusal is stored with the vendor's own words in place of the
+answer (`quota 429`, `retry 4006`, and what it said), which is usually the reason the recorder
+was opened at all.
+
 **`GET api/recorder` is the one read in the whole console that requires the token.** Every other
 view is open on the LAN by design - counts and statuses are dull to a passer-by - but this one
 returns the text. Verified from a genuinely non-loopback address: the transcript and the

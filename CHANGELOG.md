@@ -15,7 +15,10 @@ and this project uses [Semantic Versioning](https://semver.org/).
   Deliberately in memory rather than the database - at the observed rate, storing prompt text
   would be gigabytes a day - so it is capped at 200 entries and 4000 characters a side, and does
   not survive a restart. `GET api/recorder` is the only read in the console that requires the
-  token, because it is the only one that returns the text itself.
+  token, because it is the only one that returns the text itself. Refused attempts are recorded
+  too, with what the vendor said instead of an answer: a failing attempt raises out of the
+  backend, so recording only the success path left a recorder armed during a quota storm
+  reporting that nothing had gone through the hub.
 
 ## [0.5.0] - 2026-09-17
 

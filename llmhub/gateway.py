@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .auth import require_token
 from .config import CLI_KIND, Entry
 from .quota import estimate_request_cost
-from .recorder import note_call
+from .recorder import note_call, note_failure
 from .router import (
     ABANDONED_STATUS,
     CANCEL_BY_OWNER,
@@ -600,7 +600,12 @@ async def execute_chat(
     call_kind = kind or ("stream" if stream else "sync")
 
     async def call(entry: Entry, attempt_no: int) -> Any:
-        result = await call_model(hub, entry, body, app, attempt_no, stream=stream)
+        try:
+            result = await call_model(hub, entry, body, app, attempt_no, stream=stream)
+        except Exception as exc:
+            # a refused attempt never reaches the line below: it raises out of the backend
+            note_failure(hub, entry, body, app, call_kind, exc)
+            raise
         note_call(hub, entry, body, app, call_kind, result)
         return result
 

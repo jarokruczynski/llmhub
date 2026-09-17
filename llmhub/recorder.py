@@ -151,14 +151,19 @@ class Recorder:
         payload: Any,
         status: str,
         latency_ms: int,
+        answer: str | None = None,
         now: datetime | None = None,
     ) -> None:
-        """Called on the hot path: cheap when off, and it never raises into a request."""
+        """Called on the hot path: cheap when off, and it never raises into a request.
+
+        `answer` overrides what would be read out of `payload`: a refused attempt has no
+        payload to read, and what the vendor said instead is the whole point of recording it.
+        """
         moment = (now or datetime.now(UTC)).astimezone(UTC)
         if not self.recording(moment):
             return
         prompt, prompt_cut = _clip(prompt_of(body))
-        answer, answer_cut = _clip(answer_of(payload))
+        answer, answer_cut = _clip(answer if answer is not None else answer_of(payload))
         if len(self.entries) == self.entries.maxlen:
             self.dropped += 1
         self.entries.append(
@@ -223,4 +228,35 @@ def note_call(hub: Any, entry: Any, body: dict[str, Any], app: str, kind: str, r
         return
 
 
-__all__ = ["DEFAULT_MINUTES", "MAX_ENTRIES", "MAX_MINUTES", "Recorder", "note_call"]
+def note_failure(hub: Any, entry: Any, body: dict[str, Any], app: str, kind: str, exc: Any) -> None:
+    """A refused attempt, which is the case worth recording most.
+
+    An attempt that fails raises out of the backend, so the success path never sees it. Without
+    this, a recorder armed during a quota storm reports that nothing went through the hub - the
+    exact question the owner opened it to answer.
+    """
+    recorder = getattr(hub, "recorder", None)
+    if recorder is None or not recorder.recording():
+        return
+    try:
+        classification = getattr(exc, "classification", None)
+        label = str(getattr(classification, "kind", "") or "error")
+        code = getattr(classification, "code", None) or getattr(exc, "status_code", None)
+        message = str(getattr(classification, "message", "") or exc or "")
+        recorder.note(
+            app=app,
+            model_request=str(body.get("model") or ""),
+            entry_key=getattr(entry, "key", ""),
+            account=getattr(entry, "account_id", ""),
+            kind=kind,
+            body=body,
+            payload=None,
+            answer=f"{label}: {code}\n{message}".strip() if code else f"{label}: {message}".strip(),
+            status=f"{label} {code}".strip() if code else label,
+            latency_ms=int(getattr(exc, "latency_ms", 0) or 0),
+        )
+    except Exception:  # noqa: BLE001
+        return
+
+
+__all__ = ["DEFAULT_MINUTES", "MAX_ENTRIES", "MAX_MINUTES", "Recorder", "note_call", "note_failure"]

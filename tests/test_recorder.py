@@ -131,3 +131,56 @@ async def test_the_console_can_arm_and_read_it_from_the_machine(client: httpx.As
     stopped = await client.post("/api/recorder/stop")
     assert stopped.status_code == 200
     assert stopped.json()["recording"] is False
+
+
+class FakeClassification:
+    kind = "quota"
+    code = "429"
+    message = "insufficient_quota"
+
+
+class FakeUpstream(Exception):
+    classification = FakeClassification()
+    status_code = 429
+    latency_ms = 31
+
+
+def test_a_refused_attempt_is_recorded_not_dropped() -> None:
+    from llmhub.recorder import note_failure
+
+    class FakeHub:
+        pass
+
+    class FakeEntry:
+        key = "alpha/m1"
+        account_id = "alpha-1"
+
+    hub = FakeHub()
+    hub.recorder = Recorder()
+    hub.recorder.start(20)
+
+    note_failure(hub, FakeEntry(), BODY, "ytsb", "sync", FakeUpstream())
+
+    entry = hub.recorder.dump()["entries"][0]
+    assert entry["status"] == "quota 429"
+    assert "insufficient_quota" in entry["answer"]
+    assert "say ok" in entry["prompt"]
+    assert entry["latency_ms"] == 31
+
+
+def test_a_refusal_is_ignored_while_the_recorder_is_off() -> None:
+    from llmhub.recorder import note_failure
+
+    class FakeHub:
+        pass
+
+    class FakeEntry:
+        key = "alpha/m1"
+        account_id = "alpha-1"
+
+    hub = FakeHub()
+    hub.recorder = Recorder()
+
+    note_failure(hub, FakeEntry(), BODY, "ytsb", "sync", FakeUpstream())
+
+    assert hub.recorder.dump()["entries"] == []
