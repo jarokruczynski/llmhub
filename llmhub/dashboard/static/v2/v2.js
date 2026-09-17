@@ -229,6 +229,28 @@
   }
 
   // --- Data Fetching ---
+  function timeAgo(ts) {
+    if (!ts) return '';
+    const then = new Date(ts).getTime();
+    if (!Number.isFinite(then)) return '';
+    const secs = Math.max(0, Math.round((Date.now() - then) / 1000));
+    if (secs < 90) return `${secs}s ago`;
+    const mins = Math.round(secs / 60);
+    if (mins < 90) return `${mins}m ago`;
+    const hours = Math.round(mins / 60);
+    if (hours < 36) return `${hours}h ago`;
+    return `${Math.round(hours / 24)}d ago`;
+  }
+
+  // The newest thing that happened to this pair, not merely the newest failure on record. A
+  // success after a refusal retires the refusal, so a card stops flagging a quota error from
+  // three days ago while the model is serving traffic today.
+  function currentFailure(m) {
+    if (!m.last_error) return null;
+    if (m.last_ok_at && m.last_error_at && m.last_ok_at >= m.last_error_at) return null;
+    return { text: m.last_error, when: timeAgo(m.last_error_at) };
+  }
+
   function baselineById(id) {
     return (state.baselines?.baselines || []).find((b) => b.id === id) || null;
   }
@@ -701,6 +723,7 @@
     const key = m.key;
     const statusClass = m.disabled ? 'disabled' : m.status === 'ok' ? 'ready' : m.status === 'exhausted' ? 'exhausted' : m.status;
     const caps = m.caps || ['text'];
+    const failure = currentFailure(m);
 
     let quotaHtml = '';
     if (m.windows) {
@@ -749,9 +772,9 @@
           ${quotaHtml || '<div class="text-muted" style="font-size:0.75rem">Declared limits unmetered / unlimited</div>'}
         </div>
 
-        ${m.last_error ? `
-          <div style="font-size:0.72rem; color:var(--status-depleted); background:var(--status-depleted-bg); padding:4px 8px; border-radius:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(m.last_error)}">
-            ⚠️ ${escapeHtml(m.last_error)}
+        ${failure ? `
+          <div style="font-size:0.72rem; color:var(--status-depleted); background:var(--status-depleted-bg); padding:4px 8px; border-radius:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(failure.text)} (${escapeHtml(failure.when)})">
+            ⚠️ ${escapeHtml(failure.text)}${failure.when ? ` <span class="text-muted">· ${escapeHtml(failure.when)}</span>` : ''}
           </div>
         ` : ''}
 

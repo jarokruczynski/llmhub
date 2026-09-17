@@ -6,7 +6,12 @@ from typing import Any
 
 from .config import CLI_KIND, Entry
 from .runtime import Hub
-from .store import LIVE_JOB_STATES, to_iso
+from .store import LIVE_JOB_STATES, parse_iso, to_iso
+
+# How recently a vendor refusal has to have happened for the pair to still count as suspect.
+# Long enough to outlive an hourly window, short enough that a failure nothing has retried
+# since stops shouting after a while.
+RECENT_FAILURE_H = 6
 
 
 def entry_status(
@@ -16,8 +21,9 @@ def entry_status(
     disabled: set[str],
     room: dict[str, Any] | None = None,
     unavailable: dict[tuple[str, str], dict[str, Any]] | None = None,
+    stats: dict[str, Any] | None = None,
 ) -> tuple[str, str | None]:
-    """`room` and `unavailable`, when given, are numbers the caller already has.
+    """`room`, `unavailable` and `stats`, when given, are numbers the caller already has.
 
     A page with one row per (account, model) would otherwise redo the same window arithmetic
     per entry and run one query per entry for the parked pairs.
@@ -45,7 +51,29 @@ def entry_status(
         return "cooldown", to_iso(cooldown)
     if not entry_has_room(hub, entry, now, room):
         return "exhausted", "window_limit"
+    failed = recent_failure(hub, entry, now, stats)
+    if failed is not None:
+        # Nothing in our own books blocks this pair, but the last thing the vendor said was no.
+        # Reporting that as "ok" is how a card ends up green next to a refusal it cannot explain.
+        return "warning", failed
     return "ok", None
+
+
+def recent_failure(hub: Hub, entry: Entry, now: datetime, stats: dict[str, Any] | None = None) -> str | None:
+    """The newest evidence, when it is a failure recent enough to still mean something.
+
+    A later success clears it: the pair answered after the refusal, so the refusal is history.
+    """
+    row = stats if stats is not None else hub.store.model_stats(entry.account_id, entry.key)
+    last_error_at = row.get("last_error_at")
+    if not last_error_at:
+        return None
+    last_ok_at = row.get("last_ok_at")
+    if last_ok_at and str(last_ok_at) >= str(last_error_at):
+        return None
+    if parse_iso(str(last_error_at)) < now - timedelta(hours=RECENT_FAILURE_H):
+        return None
+    return f"last call failed: {row.get('last_error') or 'error'}"
 
 
 def entry_has_room(hub: Hub, entry: Entry, now: datetime, room: dict[str, Any] | None) -> bool:
@@ -110,8 +138,10 @@ def model_rows(
     for entry in hub.registry.entries():
         pair = (entry.account_id, entry.key)
         room = hub.quota.room(entry, now)
-        status, reason = entry_status(hub, entry, now, disabled, room=room, unavailable=unavailable_all)
         stats = hub.store.model_stats(entry.account_id, entry.key)
+        status, reason = entry_status(
+            hub, entry, now, disabled, room=room, unavailable=unavailable_all, stats=stats
+        )
         observed = observed_all.get(pair, {})
         windows = {name: state.as_dict() for name, state in hub.quota.windows(entry, now, observed).items()}
         rows.append(

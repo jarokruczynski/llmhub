@@ -1190,6 +1190,11 @@ body {
 .gap-2 { gap: 0.5rem; }
 
 /* Status Badges */
+.status-warning {
+  background: var(--status-depleted-bg);
+  color: var(--status-depleted);
+}
+
 .status-exhausted {
   background: var(--status-depleted-bg);
   color: var(--status-depleted);
