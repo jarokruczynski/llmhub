@@ -7,6 +7,14 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Removed
+
+- The classic dashboard (`index.html`, `app.js`, `app.css`, ~5k lines). The Studio console is
+  now the only one and is served at the mount root; `/v2` answers 308 to a relative `../`, so a
+  bookmark still lands on it both here and behind the `/hub` prefix on the LAN. Its requests are
+  resolved against the document base rather than climbing a level, which is what the old
+  two-level address needed.
+
 ### Added
 
 - `GET api/baselines` and `llmhub/baselines.py`: the list prices the savings estimate compares

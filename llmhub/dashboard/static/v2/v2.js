@@ -62,13 +62,12 @@
     }
   };
 
-  // Ground Rule 1: Never root a request at the server.
-  // The page is served at /v2/ on Mac and at /hub/v2/ through the LAN proxy.
-  // Always resolve relative paths with `../` prefix.
+  // Never root a request at the server. The console is served at / on this Mac and at /hub/
+  // behind the LAN proxy, which strips that prefix, so every path is resolved against the
+  // document base (<base href="./">) and inherits whatever prefix the page was opened under.
   function apiUrl(path) {
     if (path.startsWith('http')) return path;
-    const clean = path.replace(/^\/+/, '');
-    return '../' + clean;
+    return path.replace(/^\/+/, '');
   }
 
   // --- API Fetch Helper ---

@@ -3,16 +3,18 @@ from __future__ import annotations
 import httpx
 
 
-async def test_dashboard_v1_and_v2_routes(client: httpx.AsyncClient) -> None:
-    # Classic v1 dashboard
-    res_v1 = await client.get("/")
-    assert res_v1.status_code == 200
-    assert "text/html" in res_v1.headers.get("content-type", "")
-    assert "llmhub" in res_v1.text
-    assert "Studio v2" in res_v1.text
+async def test_the_console_is_served_at_the_root(client: httpx.AsyncClient) -> None:
+    res_root = await client.get("/")
+    assert res_root.status_code == 200
+    assert "text/html" in res_root.headers.get("content-type", "")
+    assert "LLMHub Studio v2" in res_root.text
 
-    # Modern v2 dashboard
-    res_v2 = await client.get("/v2")
+    # the old address keeps working, relative so it survives the /hub prefix on the LAN
+    moved = await client.get("/v2", follow_redirects=False)
+    assert moved.status_code == 308
+    assert moved.headers["location"] == "../"
+
+    res_v2 = await client.get("/v2", follow_redirects=True)
     assert res_v2.status_code == 200
     assert "text/html" in res_v2.headers.get("content-type", "")
     assert "LLMHub Studio v2" in res_v2.text
@@ -21,8 +23,7 @@ async def test_dashboard_v1_and_v2_routes(client: httpx.AsyncClient) -> None:
     assert "Playground" in res_v2.text
     assert "Routing & Matrix" in res_v2.text
 
-    # Trailing slash
-    res_v2_slash = await client.get("/v2/")
+    res_v2_slash = await client.get("/v2/", follow_redirects=True)
     assert res_v2_slash.status_code == 200
     assert "LLMHub Studio v2" in res_v2_slash.text
 

@@ -6,15 +6,16 @@ Each one says what is wrong, what "done" means, and where in the code to start. 
 
 ## Ground rules for all of it
 
-- **Never root a request at the server.** The page is served at `/v2` on this Mac and at
-  `/hub/v2` through the LAN proxy, which strips the `/hub` prefix. Everything goes through
-  `apiUrl()` in `v2.js`; a bare `/api/...` or `/v1/...` path loads an empty page from any device
-  other than this Mac. Same for links: relative only, `<base href="./">` is already set.
+- **Never root a request at the server.** The console is served at `/` on this Mac and at
+  `/hub/` through the LAN proxy, which strips the `/hub` prefix. Everything goes through
+  `apiUrl()` in `v2.js`, which resolves against the document base; a bare `/api/...` or `/v1/...`
+  path loads an empty page from any device other than this Mac. Same for links: relative only,
+  `<base href="./">` is already set.
 - **The repository is public.** No keys, no account names, no personal data, no `/Users/...`
   paths in anything committed.
 - `.venv/bin/python -m pytest -q` must stay green, `tests/test_dashboard_v2.py` included.
-- The classic dashboard keeps working and keeps its own look; v2 is a second console, not a
-  replacement, and the two link to each other.
+- (Superseded 2026-09-17: the classic dashboard has been removed and this console is now the
+  only one, served at the mount root. It was a second console while this list was written.)
 
 ## 1. "Live Stream Activity" shows nothing
 

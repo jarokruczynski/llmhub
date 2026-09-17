@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -25,13 +25,18 @@ MEDIA_TYPES = {
 
 @router.get("/", response_class=HTMLResponse, include_in_schema=False)
 async def dashboard_index(request: Request) -> HTMLResponse:
-    return templates.TemplateResponse(request, "index.html", {"asset_v": _asset_version()})
-
-
-@router.get("/v2", response_class=HTMLResponse, include_in_schema=False)
-@router.get("/v2/", response_class=HTMLResponse, include_in_schema=False)
-async def dashboard_v2_index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse(request, "v2.html", {"asset_v": _asset_version()})
+
+
+@router.get("/v2", include_in_schema=False)
+@router.get("/v2/", include_in_schema=False)
+async def dashboard_v2_redirect() -> RedirectResponse:
+    """Where the console used to live while the classic one held the root.
+
+    The target is relative on purpose: from /v2/ it lands on /, and from /hub/v2/ behind the
+    LAN proxy it lands on /hub/, which an absolute "/" would miss.
+    """
+    return RedirectResponse(url="../", status_code=308)
 
 
 @router.get("/v2/static/{path:path}", include_in_schema=False)
@@ -49,7 +54,7 @@ async def dashboard_static(path: str) -> FileResponse:
 
 def _asset_version() -> str:
     stamps = []
-    for name in ("app.css", "app.js", "v2/v2.css", "v2/v2.js"):
+    for name in ("v2/v2.css", "v2/v2.js"):
         f = STATIC_DIR / name
         if f.is_file():
             stamps.append(int(f.stat().st_mtime))
