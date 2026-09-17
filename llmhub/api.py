@@ -435,6 +435,54 @@ async def resume_app(request: Request, app: str) -> dict[str, Any]:
     return {"app": app, "paused": False}
 
 
+class AliasUpdateIn(BaseModel):
+    prefer: list[str] | None = None
+    spread: int | None = None
+    require: list[str] | None = None
+
+
+@router.put("/aliases/{alias_name}")
+async def update_alias(request: Request, alias_name: str, payload: AliasUpdateIn) -> dict[str, Any]:
+    require_token(request)
+    hub = hub_of(request)
+    alias_name = alias_name.strip()
+    if not alias_name:
+        raise HTTPException(status_code=400, detail="alias name cannot be empty")
+
+    all_keys = {entry.key for entry in hub.registry.entries()}
+    if payload.prefer is not None:
+        # The writer drops blanks, so a list of empty strings lands the same way an empty list
+        # does: an alias that names nothing, which routes nowhere and cannot be told from a
+        # deliberate one. Clients ask for an alias by name, so this is silent data loss on a
+        # file the owner curates - refuse it instead of writing it.
+        wanted = [key for key in (str(model_key).strip() for model_key in payload.prefer) if key]
+        if not wanted:
+            raise HTTPException(
+                status_code=400,
+                detail="prefer cannot be empty: an alias with no models would route nowhere",
+            )
+        for key_clean in wanted:
+            if key_clean not in all_keys:
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"unknown model '{key_clean}' in prefer list; must match a registered model",
+                )
+
+    if payload.spread is not None and payload.spread < 1:
+        raise HTTPException(status_code=422, detail="spread must be at least 1")
+
+    writer = RegistryWriter(hub.settings)
+    updated = writer.update_alias(
+        alias_name,
+        prefer=payload.prefer,
+        spread=payload.spread,
+        require=payload.require,
+    )
+    reload_counts(hub)
+    hub.store.add_event(kind="alias", message=f"updated alias {alias_name}")
+    return {**updated, **lan_warning(request)}
+
+
 @router.get("/apps/{app}/bans")
 async def app_bans(request: Request, app: str) -> dict[str, Any]:
     """Models this app has judged unusable, with the reason it gave."""
@@ -1249,6 +1297,110 @@ async def test_account(
     if not entry.key_present:
         return {**base, "ok": False, "status": "no_key", "api_key_env": entry.account.api_key_env}
     return {**base, **await probe_entry(hub, entry, payload.prompt)}
+
+
+class HealthSweepState:
+    last_sweep_at: str | None = None
+    last_results: list[dict[str, Any]] = []
+    last_probed: int = 0
+    last_skipped: int = 0
+
+
+_HEALTH_SWEEP = HealthSweepState()
+
+
+@router.post("/health/sweep")
+async def run_health_sweep(request: Request) -> dict[str, Any]:
+    require_token(request)
+    hub = hub_of(request)
+    now = datetime.now(UTC)
+    disabled = hub.store.disabled_models()
+    unavailable_all = hub.store.unavailable_all(now)
+
+    results: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+
+    for provider_name, provider in hub.registry.providers.items():
+        for account in provider.accounts:
+            candidate_entry = None
+            skip_reason = None
+
+            if account.api_key_env and not os.environ.get(account.api_key_env):
+                skip_reason = "missing_api_key"
+            else:
+                for model in provider.models:
+                    if not model.is_free:
+                        continue
+                    entry = hub.registry.entry(f"{provider_name}/{model.id}", account.id)
+                    if entry is None:
+                        continue
+                    if entry.key in disabled:
+                        skip_reason = "disabled"
+                        continue
+                    if entry.key in unavailable_all:
+                        skip_reason = "parked_unavailable"
+                        continue
+                    room = hub.quota.room(entry, now)
+                    if room["remaining_out"] == 0 or room["remaining_requests"] == 0:
+                        skip_reason = "exhausted"
+                        continue
+                    candidate_entry = entry
+                    break
+
+            if candidate_entry is None:
+                skipped.append(
+                    {
+                        "provider": provider_name,
+                        "account": account.id,
+                        "reason": skip_reason or "no_eligible_free_model",
+                    }
+                )
+                continue
+
+            probe_res = await probe_entry(hub, candidate_entry)
+            status_str = "ok" if probe_res.get("ok") else probe_res.get("status", "error")
+            results.append(
+                {
+                    "provider": provider_name,
+                    "account": account.id,
+                    "model": candidate_entry.key,
+                    "ok": probe_res.get("ok", False),
+                    "status": status_str,
+                    "latency_ms": probe_res.get("latency_ms", 0),
+                    "error": probe_res.get("error"),
+                }
+            )
+
+    ts = to_iso(now)
+    _HEALTH_SWEEP.last_sweep_at = ts
+    _HEALTH_SWEEP.last_results = results
+    _HEALTH_SWEEP.last_probed = len(results)
+    _HEALTH_SWEEP.last_skipped = len(skipped)
+
+    hub.store.add_event(
+        kind="health_sweep",
+        message=f"health sweep: probed {len(results)} accounts, skipped {len(skipped)}",
+    )
+
+    return {
+        "timestamp": ts,
+        "probed_count": len(results),
+        "skipped_count": len(skipped),
+        "request_cost": len(results),
+        "results": results,
+        "skipped": skipped,
+        **lan_warning(request),
+    }
+
+
+@router.get("/health/status")
+async def health_sweep_status(request: Request) -> dict[str, Any]:
+    return {
+        "last_sweep_at": _HEALTH_SWEEP.last_sweep_at,
+        "probed_count": _HEALTH_SWEEP.last_probed,
+        "skipped_count": _HEALTH_SWEEP.last_skipped,
+        "results": _HEALTH_SWEEP.last_results,
+    }
 
 
 async def discover_cli(

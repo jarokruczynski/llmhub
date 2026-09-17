@@ -852,6 +852,9 @@ body {
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
   overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  width: 100%;
+  max-width: 100%;
 }
 
 .table {
@@ -859,6 +862,7 @@ body {
   border-collapse: collapse;
   font-size: 0.82rem;
   text-align: left;
+  min-width: 600px;
 }
 
 .table th {
@@ -867,13 +871,40 @@ body {
   color: var(--text-secondary);
   font-weight: 600;
   border-bottom: 1px solid var(--border-subtle);
-  cursor: pointer;
   user-select: none;
   white-space: nowrap;
 }
 
-.table th:hover {
+.table th.th-sortable {
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.table th.th-sortable:hover {
   color: var(--text-primary);
+}
+
+.table th .sort-arrow {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 0.7rem;
+  opacity: 0.4;
+}
+
+.table th.sorted-asc .sort-arrow {
+  opacity: 1;
+  color: var(--accent-primary);
+}
+.table th.sorted-asc .sort-arrow::before {
+  content: "▲";
+}
+
+.table th.sorted-desc .sort-arrow {
+  opacity: 1;
+  color: var(--accent-primary);
+}
+.table th.sorted-desc .sort-arrow::before {
+  content: "▼";
 }
 
 .table td {
@@ -888,6 +919,94 @@ body {
 
 .table tr:hover td {
   background: var(--bg-card-hover);
+}
+
+/* Grids for card views */
+.jobs-grid, .promos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 1rem;
+}
+
+/* Prefer list editor in modal */
+.prefer-item-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.4rem 0.75rem;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+
+/* Live stream item in Overview */
+.live-stream-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.6rem 0.85rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  margin-bottom: 0.5rem;
+  font-size: 0.82rem;
+}
+.live-stream-row.running {
+  border-left: 3px solid #38bdf8;
+}
+.live-stream-row.waiting {
+  border-left: 3px solid var(--status-cooldown);
+}
+
+/* Responsive Rules for Mobile and LAN Devices */
+@media (max-width: 840px) {
+  .studio-header {
+    padding: 0.5rem 0.75rem;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+  .header-status-group {
+    order: 3;
+    width: 100%;
+    justify-content: space-between;
+  }
+  .header-controls {
+    order: 2;
+    margin-left: auto;
+  }
+  .studio-nav {
+    padding: 0 0.5rem;
+  }
+  .nav-item {
+    padding: 0.6rem 0.65rem;
+    font-size: 0.8rem;
+  }
+  .studio-main {
+    padding: 0.75rem;
+    max-width: 100vw;
+    box-sizing: border-box;
+  }
+  .overview-columns {
+    grid-template-columns: 1fr !important;
+  }
+  .playground-layout {
+    grid-template-columns: 1fr !important;
+  }
+  .models-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+  .models-filters {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .models-filters input[type="search"],
+  .models-filters select {
+    width: 100% !important;
+  }
 }
 
 /* ==================== Routing & Topology Tab ==================== */

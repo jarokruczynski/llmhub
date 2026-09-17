@@ -1361,6 +1361,7 @@ class Store:
                    COUNT(*) AS requests,
                    COALESCE(SUM(in_tokens), 0) AS in_tokens,
                    COALESCE(SUM(out_tokens), 0) AS out_tokens,
+                   COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
                    COALESCE(SUM(total_tokens), 0) AS total_tokens,
                    SUM(CASE WHEN status NOT IN ('ok', 'abandoned') THEN 1 ELSE 0 END) AS errors
             FROM usage{where}

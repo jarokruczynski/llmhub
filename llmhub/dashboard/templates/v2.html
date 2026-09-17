@@ -6,6 +6,14 @@
   <title>LLMHub Studio v2</title>
   <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%236366f1'/%3E%3Cpath d='M4 8l3 3 5-6' stroke='white' stroke-width='2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
   <base href="./">
+  <script>
+  (function () {
+    var p = location.pathname;
+    if (p.charAt(p.length - 1) !== "/") {
+      location.replace(p + "/" + location.search + location.hash);
+    }
+  })();
+  </script>
   <link rel="stylesheet" href="static/v2/v2.css?v={{ asset_v }}">
 </head>
 <body>
@@ -13,7 +21,7 @@
   <!-- Topbar Header -->
   <header class="studio-header">
     <div class="brand-group">
-      <a href="v2" class="logo-link">
+      <a href="./" class="logo-link">
         <div class="logo-icon">H</div>
         <span class="brand-text">LLMHub</span>
       </a>
@@ -21,15 +29,15 @@
     </div>
 
     <div class="header-status-group">
-      <div class="live-pill" id="live-indicator-pill" title="Click to open Live Activity inspector">
+      <div class="live-pill" id="live-indicator-pill" title="Click to view Live in-flight activity">
         <span class="pulse-dot" id="live-pulse-dot"></span>
         <span id="live-text">Gateway Idle</span>
       </div>
-      <span class="nav-badge" id="top-models-summary" style="font-size:0.75rem; padding:3px 8px;">Models -</span>
+      <span class="nav-badge" id="top-models-summary">Models -</span>
     </div>
 
     <div class="header-controls">
-      <a href="./" class="btn btn-switch-v1" title="Switch back to Classic v1 Dashboard">← Classic v1</a>
+      <a href="../" class="btn btn-switch-v1" title="Switch back to Classic v1 Dashboard">← Classic v1</a>
       <button type="button" class="btn" id="theme-toggle" title="Toggle Light / Dark mode">☀️ Light</button>
       <button type="button" class="btn" id="token-btn" title="Set Bearer Auth Token">Token</button>
       <button type="button" class="btn" id="refresh-btn" title="Reload all data">↻ Refresh</button>
@@ -60,8 +68,11 @@
     <button type="button" class="nav-item" data-tab="promos">
       <span>Promos & Scout</span>
     </button>
+    <button type="button" class="nav-item" data-tab="usage">
+      <span>Usage & Savings</span>
+    </button>
     <button type="button" class="nav-item" data-tab="events">
-      <span>Events & Audit</span>
+      <span>Events Log</span>
     </button>
   </nav>
 
@@ -77,6 +88,7 @@
       <div class="quick-actions-bar">
         <span class="quick-actions-title">⚡ Quick Actions:</span>
         <button type="button" class="btn btn-primary" id="btn-quick-add">+ Quick Add Key</button>
+        <button type="button" class="btn" id="btn-health-sweep" onclick="runAvailabilitySweep()">⚡ Check Availability</button>
         <button type="button" class="btn" id="btn-reload-registry">🔄 Reload Registry</button>
         <button type="button" class="btn" onclick="triggerScoutRun()">🎯 Trigger Scout</button>
         <button type="button" class="btn" onclick="switchTab('playground')">▶ Open Playground</button>
@@ -95,11 +107,11 @@
 
         <div class="section-card">
           <div class="section-header">
-            <span class="section-title">📡 Live Stream Activity</span>
-            <span class="text-muted" style="font-size:0.8rem">Auto-updates</span>
+            <span class="section-title">📡 Live Gateway In-Flight Streams</span>
+            <span class="text-muted" style="font-size:0.8rem">Auto-refresh (2s)</span>
           </div>
-          <div id="overview-live-summary">
-            <div class="text-muted" style="padding:1rem 0;">Real-time stream monitoring active. Use the <strong>Playground</strong> to test model routing and live streaming.</div>
+          <div id="overview-live-container">
+            <!-- Injected by v2.js -->
           </div>
         </div>
       </div>
@@ -200,7 +212,7 @@
             <button type="button" class="filter-chip active" data-status="all">All</button>
             <button type="button" class="filter-chip" data-status="ready">Ready</button>
             <button type="button" class="filter-chip" data-status="cooldown">Cooldown</button>
-            <button type="button" class="filter-chip" data-status="quota">Quota Out</button>
+            <button type="button" class="filter-chip" data-status="exhausted">Exhausted</button>
             <button type="button" class="filter-chip" data-status="disabled">Disabled</button>
           </div>
 
@@ -215,7 +227,7 @@
             <option value="">All Providers</option>
           </select>
 
-          <input type="search" class="input" id="models-search-input" placeholder="Search provider, model, account..." style="width:220px">
+          <input type="search" class="input" id="models-search-input" placeholder="Search provider, model, account..." style="width:200px">
           <span class="text-muted" id="models-filter-count" style="font-size:0.8rem">-</span>
         </div>
 
@@ -232,7 +244,21 @@
 
     <!-- TAB 4: ROUTING & MATRIX -->
     <section class="panel" data-panel="routing">
-      <h2 style="font-size:1.15rem; font-weight:700; margin-bottom:1rem">Configured Routing Aliases</h2>
+      <!-- Plain English Explanation Banner -->
+      <div class="section-card" style="margin-bottom:1.5rem; background:linear-gradient(135deg, rgba(99,102,241,0.06), rgba(56,189,248,0.06)); border-color:rgba(99,102,241,0.2)">
+        <div style="font-weight:700; font-size:1.05rem; margin-bottom:0.4rem; color:var(--text-primary)">
+          🧭 What are Routing Aliases?
+        </div>
+        <p style="font-size:0.88rem; color:var(--text-secondary); line-height:1.6">
+          A <strong>Routing Alias</strong> (like <code>auto</code>, <code>fast</code>, <code>vision</code>, <code>strong</code>) is a named routing profile defined in <code>~/.llmhub/providers.yaml</code>.
+          When your app asks for <code>"model": "auto"</code>, the gateway rotates calls across the models in its <strong>preference list</strong>, spreading traffic across the top candidates according to the <strong>spread</strong> setting (least-recently-used).
+          You can edit any alias profile below to reorder preferences, add or remove models, and tune candidate spread.
+        </p>
+      </div>
+
+      <div class="section-header">
+        <h2 style="font-size:1.15rem; font-weight:700">Configured Routing Profiles</h2>
+      </div>
       <div class="aliases-grid" id="routing-aliases-grid">
         <!-- Populated by v2.js -->
       </div>
@@ -241,10 +267,10 @@
       <div class="simulator-box">
         <h3 style="font-size:1.1rem; font-weight:700; margin-bottom:0.5rem">🔮 Interactive Routing Simulator</h3>
         <p class="text-secondary" style="font-size:0.85rem; margin-bottom:1rem">
-          Test how llmhub evaluates candidate models based on estimated prompt length, capabilities and quota windows.
+          Simulate how llmhub selects a candidate based on estimated prompt tokens, required capabilities, and live quota room.
         </p>
 
-        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(200px, 1fr)); gap:1rem; align-items:flex-end">
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(180px, 1fr)); gap:1rem; align-items:flex-end">
           <div class="form-group">
             <label class="form-label" for="sim-alias">Target Alias</label>
             <select class="select" id="sim-alias"></select>
@@ -267,20 +293,26 @@
         </div>
 
         <div class="simulator-result-box" id="sim-result">
-          <div class="text-muted" style="font-size:0.85rem">Click "Run Simulation" to see the winning model.</div>
+          <div class="text-muted" style="font-size:0.85rem">Click "Run Simulation" to see the winning candidate.</div>
         </div>
       </div>
     </section>
 
-    <!-- TAB 5: QUEUE -->
+    <!-- TAB 5: QUEUE & JOBS -->
     <section class="panel" data-panel="queue">
       <div class="kpi-grid" id="queue-summary-bar" style="margin-bottom:1.5rem">
         <!-- Injected by v2.js -->
       </div>
       <div class="section-card">
         <div class="section-header">
-          <span class="section-title">Async Jobs Queue</span>
-          <button type="button" class="btn btn-sm" onclick="loadJobs()">↻ Refresh</button>
+          <span class="section-title">Async Jobs Queue & App Control</span>
+          <div style="display:flex; gap:0.5rem; align-items:center">
+            <div class="chips-group">
+              <button type="button" class="filter-chip active" id="queue-view-table" title="Dense Table View">☰ Table</button>
+              <button type="button" class="filter-chip" id="queue-view-cards" title="Card View">⊞ Cards</button>
+            </div>
+            <button type="button" class="btn btn-sm" onclick="loadJobs()">↻ Refresh</button>
+          </div>
         </div>
         <div id="queue-jobs-list"></div>
       </div>
@@ -290,17 +322,32 @@
     <section class="panel" data-panel="accounts">
       <div class="section-header">
         <div>
-          <h2 style="font-size:1.15rem; font-weight:700">Configured Accounts & Keys</h2>
+          <h2 style="font-size:1.15rem; font-weight:700">Configured Provider Accounts</h2>
           <p class="text-secondary" style="font-size:0.85rem">Keys reside safely in <code>~/.llmhub/env/</code> and are never returned or logged.</p>
         </div>
-        <button type="button" class="btn btn-primary" onclick="document.getElementById('modal-quick-add').classList.add('open')">+ Quick Add Account</button>
-      </div>
-
-      <div class="section-card" style="margin-top:1rem">
-        <div id="accounts-list-content">
-          <p class="text-muted">Use <strong>+ Quick Add Account</strong> to connect any provider key with automated endpoint verification.</p>
+        <div style="display:flex; gap:0.5rem; align-items:center">
+          <div class="chips-group">
+            <button type="button" class="filter-chip active" id="accounts-view-cards" title="Card Grid View">⊞ Cards</button>
+            <button type="button" class="filter-chip" id="accounts-view-table" title="Table View">☰ Table</button>
+          </div>
+          <button type="button" class="btn btn-primary" onclick="document.getElementById('modal-quick-add').classList.add('open')">+ Quick Add Account</button>
         </div>
       </div>
+
+      <!-- Health Sweep Banner -->
+      <div class="section-card" style="margin-top:1rem; margin-bottom:1rem; background:var(--bg-surface)">
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem">
+          <div>
+            <span style="font-weight:600; font-size:0.9rem">🛡️ Availability Health Verification:</span>
+            <span class="text-muted" style="font-size:0.8rem; margin-left:0.5rem" id="sweep-summary-text">
+              Paced probe (1 request per active account, skips exhausted/parked).
+            </span>
+          </div>
+          <button type="button" class="btn btn-sm" id="btn-run-sweep-accounts" onclick="runAvailabilitySweep()">⚡ Run Availability Sweep</button>
+        </div>
+      </div>
+
+      <div id="accounts-list-content"></div>
     </section>
 
     <!-- TAB 7: PROMOS & SCOUT -->
@@ -308,30 +355,103 @@
       <div class="section-card" id="scout-status-card" style="margin-bottom:1.5rem">
         <!-- Injected by v2.js -->
       </div>
-      <div class="section-header">
-        <span class="section-title">Free-Tier Leads Watchlist</span>
-        <button type="button" class="btn btn-sm" onclick="loadPromos()">↻ Refresh</button>
+
+      <!-- Promos Toolbar with Filters -->
+      <div class="models-toolbar" style="margin-bottom:1rem">
+        <div class="models-filters">
+          <div class="chips-group" id="promos-status-chips">
+            <button type="button" class="filter-chip active" data-status="all">All</button>
+            <button type="button" class="filter-chip" data-status="new">New</button>
+            <button type="button" class="filter-chip" data-status="known">Known</button>
+            <button type="button" class="filter-chip" data-status="used">Used</button>
+            <button type="button" class="filter-chip" data-status="expired">Expired</button>
+            <button type="button" class="filter-chip" data-status="rejected">Rejected</button>
+          </div>
+
+          <select class="select" id="promos-provider-select">
+            <option value="">All Providers</option>
+          </select>
+
+          <input type="search" class="input" id="promos-search-input" placeholder="Search provider or note..." style="width:200px">
+          <span class="text-muted" id="promos-filter-count" style="font-size:0.8rem">-</span>
+        </div>
+
+        <div class="chips-group">
+          <button type="button" class="filter-chip active" id="promos-view-cards" title="Card View">⊞ Cards</button>
+          <button type="button" class="filter-chip" id="promos-view-table" title="Table View">☰ Table</button>
+        </div>
       </div>
+
       <div id="promos-list"></div>
     </section>
 
-    <!-- TAB 8: EVENTS & AUDIT -->
-    <section class="panel" data-panel="events">
-      <div class="section-card" style="margin-bottom:1.5rem">
-        <div class="section-header">
-          <span class="section-title">Token Usage Trend (Last 14 Days)</span>
-        </div>
-        <div id="usage-chart-container" style="min-height:160px">
-          <!-- Injected by v2.js -->
+    <!-- TAB 8: USAGE & ESTIMATED SAVINGS -->
+    <section class="panel" data-panel="usage">
+      <!-- Savings Hero Card -->
+      <div class="section-card" id="savings-hero-card" style="margin-bottom:1.5rem; background:linear-gradient(135deg, rgba(16,185,129,0.06), rgba(56,189,248,0.06)); border-color:rgba(16,185,129,0.25)">
+        <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:1rem">
+          <div>
+            <div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); font-weight:700">
+              Estimated Value Generated (Hub Routing Savings)
+            </div>
+            <div style="font-size:2.4rem; font-weight:800; color:var(--status-ready); letter-spacing:-0.03em" id="savings-headline-amount">
+              $0.00
+            </div>
+            <p class="text-secondary" style="font-size:0.82rem; margin-top:2px" id="savings-baseline-description">
+              Calculated against <strong>OpenAI GPT-4o standard baseline</strong> ($2.50/1M in, $1.25/1M cached, $10.00/1M out).
+            </p>
+            <span class="text-muted" style="font-size:0.75rem">
+              Honest estimate: based on exact recorded token usage. Cached tokens are discounted per baseline policy.
+            </span>
+          </div>
+
+          <div style="display:flex; flex-direction:column; gap:0.5rem; align-items:flex-end">
+            <div style="display:flex; gap:0.5rem; align-items:center">
+              <span class="text-muted" style="font-size:0.8rem">Baseline:</span>
+              <select class="select" id="savings-baseline-select" style="font-size:0.8rem">
+                <option value="gpt4o">OpenAI GPT-4o ($2.50 / $10.00)</option>
+                <option value="claude_sonnet">Claude 3.5 Sonnet ($3.00 / $15.00)</option>
+                <option value="gpt4o_mini">GPT-4o-mini ($0.15 / $0.60)</option>
+                <option value="tier_matched">Tier-Matched Equivalent</option>
+              </select>
+            </div>
+
+            <div style="display:flex; gap:0.5rem; align-items:center">
+              <span class="text-muted" style="font-size:0.8rem">Period:</span>
+              <div class="chips-group" id="usage-period-chips">
+                <button type="button" class="filter-chip active" data-period="all">All Time</button>
+                <button type="button" class="filter-chip" data-period="30d">Last 30d</button>
+                <button type="button" class="filter-chip" data-period="7d">Last 7d</button>
+                <button type="button" class="filter-chip" data-period="today">Today</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
+      <!-- Per-Model Usage Table -->
       <div class="section-card">
         <div class="section-header">
-          <span class="section-title">System & Vendor Error Events</span>
+          <span class="section-title">Per-Model Token Breakdown</span>
+          <div style="display:flex; gap:0.5rem; align-items:center">
+            <input type="search" class="input" id="usage-search-input" placeholder="Search model..." style="width:180px">
+            <button type="button" class="btn btn-sm" onclick="loadUsage()">↻ Refresh</button>
+          </div>
+        </div>
+        <div id="usage-table-container" class="table-container">
+          <!-- Injected by v2.js -->
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 9: EVENTS LOG -->
+    <section class="panel" data-panel="events">
+      <div class="section-card">
+        <div class="section-header">
+          <span class="section-title">System, Quota & Error Audit Events</span>
           <button type="button" class="btn btn-sm" onclick="loadEvents()">↻ Refresh</button>
         </div>
-        <div id="events-list"></div>
+        <div id="events-list" class="table-container"></div>
       </div>
     </section>
 
@@ -369,6 +489,42 @@
       <div class="modal-footer">
         <button type="button" class="btn modal-close">Cancel</button>
         <button type="button" class="btn btn-primary" id="qa-submit-btn">Verify & Add Key</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal: Edit Routing Alias Profile -->
+  <div class="modal-backdrop" id="modal-edit-alias">
+    <div class="modal-dialog" style="max-width:620px">
+      <div class="modal-header">
+        <h3 style="font-size:1.1rem; font-weight:700" id="mea-title">Edit Alias Profile</h3>
+        <button type="button" class="btn btn-sm modal-close">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label class="form-label" for="mea-spread">Spread (LRU Candidate Pool Size)</label>
+          <input type="number" class="input" id="mea-spread" min="1" max="20" value="4">
+          <span class="text-muted" style="font-size:0.75rem">Rotates calls across the top N eligible candidates instead of burning the 1st until it 429s.</span>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label">Preference Chain (Ranked Order)</label>
+          <div id="mea-prefer-list" style="display:flex; flex-direction:column; gap:6px; max-height:260px; overflow-y:auto; padding:4px">
+            <!-- Populated dynamically -->
+          </div>
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="mea-add-model">Add Model to Preference List</label>
+          <div style="display:flex; gap:0.5rem">
+            <select class="select" id="mea-add-model" style="flex:1"></select>
+            <button type="button" class="btn" id="mea-add-btn">+ Add</button>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn modal-close">Cancel</button>
+        <button type="button" class="btn btn-primary" id="mea-save-btn">Save & Reload Registry</button>
       </div>
     </div>
   </div>

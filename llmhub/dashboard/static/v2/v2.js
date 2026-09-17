@@ -6,6 +6,35 @@
 (function () {
   'use strict';
 
+  // --- Baseline Pricing Definitions (per 1M tokens) ---
+  const BASELINES = {
+    gpt4o: {
+      name: 'OpenAI GPT-4o',
+      priceIn: 2.50,
+      priceCached: 1.25,
+      priceOut: 10.00,
+      desc: 'Calculated against <strong>OpenAI GPT-4o standard baseline</strong> ($2.50/1M in, $1.25/1M cached, $10.00/1M out).'
+    },
+    claude_sonnet: {
+      name: 'Claude 3.5 Sonnet',
+      priceIn: 3.00,
+      priceCached: 0.30,
+      priceOut: 15.00,
+      desc: 'Calculated against <strong>Anthropic Claude 3.5 Sonnet baseline</strong> ($3.00/1M in, $0.30/1M cached, $15.00/1M out).'
+    },
+    gpt4o_mini: {
+      name: 'GPT-4o-mini',
+      priceIn: 0.15,
+      priceCached: 0.075,
+      priceOut: 0.60,
+      desc: 'Calculated against <strong>OpenAI GPT-4o-mini baseline</strong> ($0.15/1M in, $0.075/1M cached, $0.60/1M out).'
+    },
+    tier_matched: {
+      name: 'Tier-Matched Equivalent',
+      desc: 'Calculated using <strong>Tier-Matched baselines</strong> (mini/flash/8b models matched to $0.15/$0.60, flagship/large models matched to $2.50/$10.00).'
+    }
+  };
+
   // --- State ---
   const state = {
     token: localStorage.getItem('llmhub_token') || '',
@@ -15,20 +44,40 @@
     live: [],
     inFlightTotal: 0,
     apps: [],
-    usage: null,
+    usageModelRows: [],
+    usagePeriod: 'all',
+    savingsBaseline: 'gpt4o',
+    usageSearch: '',
     jobs: [],
     queueDepth: {},
     promos: [],
-    promosFilter: 'all',
+    promosFilter: {
+      status: 'all',
+      provider: '',
+      search: ''
+    },
     scoutStatus: null,
     events: [],
+    views: {
+      models: localStorage.getItem('llmhub_view_models') || 'cards',
+      queue: localStorage.getItem('llmhub_view_queue') || 'table',
+      accounts: localStorage.getItem('llmhub_view_accounts') || 'cards',
+      promos: localStorage.getItem('llmhub_view_promos') || 'cards'
+    },
     modelsFilter: {
       status: 'all',
       cap: 'all',
       provider: '',
-      search: '',
-      view: localStorage.getItem('llmhub_models_view') || 'grid'
+      search: ''
     },
+    sort: {
+      models: { col: null, asc: true },
+      queue: { col: null, asc: true },
+      accounts: { col: null, asc: true },
+      promos: { col: null, asc: true },
+      usage: { col: 'total_tokens', asc: false }
+    },
+    editingAlias: null,
     livePollTimer: null,
     statusPollTimer: null,
     playground: {
@@ -37,13 +86,13 @@
     }
   };
 
-  // The page is served at /v2 on this Mac and at /hub/v2 behind the LAN proxy, which strips
-  // the /hub prefix. A path rooted at the server misses the hub entirely from the LAN, so
-  // every request is resolved against the app root instead.
-  const ROOT = window.location.pathname.replace(/\/v2\/?$/, '') + '/';
-
+  // Ground Rule 1: Never root a request at the server.
+  // The page is served at /v2/ on Mac and at /hub/v2/ through the LAN proxy.
+  // Always resolve relative paths with `../` prefix.
   function apiUrl(path) {
-    return path.startsWith('http') ? path : ROOT + path.replace(/^\//, '');
+    if (path.startsWith('http')) return path;
+    const clean = path.replace(/^\/+/, '');
+    return '../' + clean;
   }
 
   // --- API Fetch Helper ---
@@ -125,6 +174,65 @@
     return `${m}m ${s}s`;
   }
 
+  function formatTimeAgo(isoString) {
+    if (!isoString) return 'Never';
+    const target = new Date(isoString).getTime();
+    const now = Date.now();
+    const diff = Math.max(0, Math.floor((now - target) / 1000));
+    if (diff < 60) return 'Just now';
+    const m = Math.floor(diff / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.floor(h / 24);
+    return `${d}d ago`;
+  }
+
+  // --- Universal Table Sorting (Item 3) ---
+  function renderSortHeader(tableId, colKey, label) {
+    const current = state.sort[tableId] || {};
+    const isSorted = current.col === colKey;
+    const sortClass = isSorted ? (current.asc ? 'sorted-asc' : 'sorted-desc') : '';
+    return `<th class="th-sortable ${sortClass}" onclick="handleTableSort('${tableId}', '${colKey}')">${escapeHtml(label)}<span class="sort-arrow"></span></th>`;
+  }
+
+  window.handleTableSort = function (tableId, colKey) {
+    const current = state.sort[tableId] || { col: null, asc: true };
+    if (current.col === colKey) {
+      current.asc = !current.asc;
+    } else {
+      current.col = colKey;
+      const descCols = ['tokens', 'requests', 'latency', 'in_tokens', 'out_tokens', 'cached_tokens', 'total_tokens', 'est_cost', 'created_at', 'last_checked_at'];
+      current.asc = !descCols.some(c => colKey.toLowerCase().includes(c));
+    }
+    state.sort[tableId] = current;
+
+    if (tableId === 'models') renderModels();
+    else if (tableId === 'queue') renderJobs();
+    else if (tableId === 'accounts') renderAccounts();
+    else if (tableId === 'promos') renderPromos();
+    else if (tableId === 'usage') renderUsage();
+  };
+
+  function applySort(items, tableId, keyExtractor) {
+    const sort = state.sort[tableId];
+    if (!sort || !sort.col) return items;
+
+    return [...items].sort((a, b) => {
+      let valA = keyExtractor(a, sort.col);
+      let valB = keyExtractor(b, sort.col);
+
+      if (valA === undefined || valA === null) valA = '';
+      if (valB === undefined || valB === null) valB = '';
+
+      if (typeof valA === 'number' && typeof valB === 'number') {
+        return sort.asc ? valA - valB : valB - valA;
+      }
+      const cmp = String(valA).localeCompare(String(valB), undefined, { numeric: true, sensitivity: 'base' });
+      return sort.asc ? cmp : -cmp;
+    });
+  }
+
   // --- Theme Management ---
   function initTheme() {
     if (state.theme === 'light') {
@@ -147,7 +255,7 @@
   // --- Data Fetching ---
   async function loadStatus() {
     try {
-      const res = await api('/api/status');
+      const res = await api('api/status');
       if (res.ok) {
         state.status = await res.json();
         renderOverview();
@@ -164,7 +272,7 @@
 
   async function loadLive() {
     try {
-      const res = await api('/api/live?window_min=15');
+      const res = await api('api/live?window_min=15');
       if (res.ok) {
         const data = await res.json();
         state.inFlightTotal = data.in_flight_total || 0;
@@ -176,6 +284,7 @@
         });
         state.live = calls;
         updateLiveIndicator();
+        renderOverviewLive();
         renderLiveDrawer();
       }
     } catch (e) {
@@ -185,10 +294,19 @@
 
   async function loadUsage() {
     try {
-      const res = await api('/api/usage?group_by=day');
+      let sinceParam = '';
+      if (state.usagePeriod === 'today') {
+        sinceParam = '&since=' + new Date().toISOString().slice(0, 10);
+      } else if (state.usagePeriod === '7d') {
+        sinceParam = '&since=' + new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+      } else if (state.usagePeriod === '30d') {
+        sinceParam = '&since=' + new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10);
+      }
+
+      const res = await api('api/usage?group_by=model' + sinceParam);
       if (res.ok) {
         const data = await res.json();
-        state.usage = data;
+        state.usageModelRows = data.rows || [];
         renderUsage();
       }
     } catch (e) {
@@ -199,8 +317,8 @@
   async function loadJobs() {
     try {
       const [jobsRes, appsRes] = await Promise.all([
-        api('/api/jobs'),
-        api('/api/apps')
+        api('api/jobs'),
+        api('api/apps')
       ]);
       if (jobsRes.ok) {
         const data = await jobsRes.json();
@@ -220,8 +338,8 @@
   async function loadPromos() {
     try {
       const [promosRes, scoutRes] = await Promise.all([
-        api('/api/promos'),
-        api('/api/scout/status')
+        api('api/promos'),
+        api('api/scout/status')
       ]);
       if (promosRes.ok) state.promos = (await promosRes.json()).promos || [];
       if (scoutRes.ok) state.scoutStatus = await scoutRes.json();
@@ -233,7 +351,7 @@
 
   async function loadEvents() {
     try {
-      const res = await api('/api/events?limit=100');
+      const res = await api('api/events?limit=100');
       if (res.ok) {
         const data = await res.json();
         state.events = data.events || [];
@@ -268,13 +386,11 @@
     loadPromos();
     loadEvents();
 
-    // Poll live calls every 2s if calls exist, else 8s
     clearInterval(state.livePollTimer);
     state.livePollTimer = setInterval(() => {
       loadLive();
     }, state.inFlightTotal > 0 ? 2000 : 8000);
 
-    // Poll full status every 15s
     clearInterval(state.statusPollTimer);
     state.statusPollTimer = setInterval(() => {
       loadStatus();
@@ -326,14 +442,15 @@
       el.classList.toggle('active', el.dataset.panel === tabId);
     });
 
-    if (tabId === 'usage' && !state.usage) loadUsage();
+    if (tabId === 'usage') loadUsage();
     if (tabId === 'queue') loadJobs();
     if (tabId === 'accounts') renderAccounts();
     if (tabId === 'promos') loadPromos();
     if (tabId === 'events') loadEvents();
   }
+  window.switchTab = switchTab;
 
-  // --- RENDER: OVERVIEW ---
+  // --- RENDER: OVERVIEW & LIVE (Item 1) ---
   function renderOverview() {
     if (!state.status) return;
     const models = state.status.models || [];
@@ -399,41 +516,78 @@
         topModelsEl.innerHTML = '<div class="text-muted" style="padding: 1.25rem 0;">No model activity recorded today yet. Try the Playground to test routing!</div>';
       } else {
         topModelsEl.innerHTML = `
-          <table class="table">
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>Provider</th>
-                <th>Today Reqs</th>
-                <th>Tokens Out</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${topModels.map(m => `
+          <div class="table-container">
+            <table class="table">
+              <thead>
                 <tr>
-                  <td class="font-mono" style="font-weight:600">${escapeHtml(m.model || m.key)}</td>
-                  <td><span class="cap-tag">${escapeHtml(m.provider)}</span></td>
-                  <td style="font-weight:600">${formatNumber(m.usage_today?.requests || 0)}</td>
-                  <td>${formatTokens(m.usage_today?.out_tokens || 0)}</td>
-                  <td><span class="status-badge status-${m.status === 'ok' ? 'ready' : m.status === 'exhausted' ? 'exhausted' : m.status}">${escapeHtml(m.status)}</span></td>
+                  <th>Model</th>
+                  <th>Provider</th>
+                  <th>Today Reqs</th>
+                  <th>Tokens Out</th>
+                  <th>Status</th>
                 </tr>
-              `).join('')}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                ${topModels.map(m => `
+                  <tr>
+                    <td class="font-mono" style="font-weight:600">${escapeHtml(m.model || m.key)}</td>
+                    <td><span class="cap-tag">${escapeHtml(m.provider)}</span></td>
+                    <td style="font-weight:600">${formatNumber(m.usage_today?.requests || 0)}</td>
+                    <td>${formatTokens(m.usage_today?.out_tokens || 0)}</td>
+                    <td><span class="status-badge status-${m.status === 'ok' ? 'ready' : m.status === 'exhausted' ? 'exhausted' : m.status}">${escapeHtml(m.status)}</span></td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
         `;
       }
     }
+
+    renderOverviewLive();
   }
 
-  // --- RENDER: MODELS FLEET ---
+  function renderOverviewLive() {
+    const liveContainer = document.getElementById('overview-live-container');
+    if (!liveContainer) return;
+
+    if (!state.live || state.live.length === 0) {
+      liveContainer.innerHTML = `
+        <div class="text-muted" style="padding: 1.5rem 0; text-align:center; font-size:0.88rem">
+          Gateway is currently idle. No active in-flight streams.
+        </div>
+      `;
+      return;
+    }
+
+    liveContainer.innerHTML = state.live.map(c => `
+      <div class="live-stream-row ${c.state === 'running' ? 'running' : 'waiting'}">
+        <div>
+          <div style="font-weight:600; display:flex; align-items:center; gap:6px">
+            <span class="cap-tag">${escapeHtml(c.app || 'default')}</span>
+            <span class="font-mono" style="font-size:0.82rem">${escapeHtml(c.model)}</span>
+          </div>
+          <div class="text-muted" style="font-size:0.75rem; margin-top:3px">
+            State: <strong style="color:var(--text-primary)">${escapeHtml(c.state || 'running')}</strong> •
+            Running for <strong>${Math.round(c.elapsed_s || 0)}s</strong> •
+            ID: <code class="font-mono" style="font-size:0.72rem">${escapeHtml(c.call_id || '-')}</code>
+          </div>
+        </div>
+        <div>
+          <button type="button" class="btn btn-sm btn-danger" onclick="cancelCall('${escapeHtml(c.call_id)}')">Kill</button>
+        </div>
+      </div>
+    `).join('');
+  }
+
+  // --- RENDER: MODELS FLEET (Items 3 & 5) ---
   function renderModels() {
     if (!state.status) return;
     const models = state.status.models || [];
     const filter = state.modelsFilter;
 
     // Filter list
-    const filtered = models.filter(m => {
+    let filtered = models.filter(m => {
       if (filter.status !== 'all') {
         if (filter.status === 'ready' && m.status !== 'ok') return false;
         if (filter.status === 'cooldown' && m.status !== 'cooldown') return false;
@@ -470,38 +624,50 @@
     const container = document.getElementById('models-container');
     if (!container) return;
 
-    if (filter.view === 'grid') {
+    if (state.views.models === 'cards') {
       container.innerHTML = `
         <div class="models-grid">
           ${filtered.map(m => renderModelCard(m)).join('')}
         </div>
       `;
     } else {
+      // Sort table
+      const sorted = applySort(filtered, 'models', (m, col) => {
+        if (col === 'model') return m.model || m.key;
+        if (col === 'provider') return m.provider;
+        if (col === 'account') return m.account;
+        if (col === 'status') return m.disabled ? 'disabled' : m.status;
+        if (col === 'reqs') return m.usage_today?.requests || 0;
+        if (col === 'tokens') return m.usage_today?.out_tokens || 0;
+        if (col === 'latency') return m.avg_latency_ms || 0;
+        return m[col];
+      });
+
       container.innerHTML = `
         <div class="table-container">
           <table class="table">
             <thead>
               <tr>
-                <th>Model / Key</th>
-                <th>Provider</th>
-                <th>Account</th>
+                ${renderSortHeader('models', 'model', 'Model / Key')}
+                ${renderSortHeader('models', 'provider', 'Provider')}
+                ${renderSortHeader('models', 'account', 'Account')}
                 <th>Capabilities</th>
-                <th>Status</th>
-                <th>Today Usage</th>
-                <th>Quota Windows</th>
-                <th>Latency</th>
+                ${renderSortHeader('models', 'status', 'Status')}
+                ${renderSortHeader('models', 'reqs', 'Today Reqs')}
+                ${renderSortHeader('models', 'tokens', 'Tokens Out')}
+                <th>Daily Limit</th>
+                ${renderSortHeader('models', 'latency', 'Avg Latency')}
                 <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              ${filtered.map(m => renderModelTableRow(m)).join('')}
+              ${sorted.map(m => renderModelTableRow(m)).join('')}
             </tbody>
           </table>
         </div>
       `;
     }
 
-    // Attach action listeners
     container.querySelectorAll('[data-action]').forEach(btn => {
       btn.addEventListener('click', handleModelAction);
     });
@@ -512,7 +678,6 @@
     const statusClass = m.disabled ? 'disabled' : m.status === 'ok' ? 'ready' : m.status === 'exhausted' ? 'exhausted' : m.status;
     const caps = m.caps || ['text'];
 
-    // Quota windows
     let quotaHtml = '';
     if (m.windows) {
       for (const [winType, win] of Object.entries(m.windows)) {
@@ -603,10 +768,11 @@
           </div>
         </td>
         <td><span class="status-badge status-${statusClass}">${m.disabled ? 'Disabled' : escapeHtml(m.status)}</span></td>
-        <td>${formatNumber(m.usage_today?.requests || 0)} reqs / ${formatTokens(m.usage_today?.out_tokens || 0)} tok</td>
+        <td>${formatNumber(m.usage_today?.requests || 0)}</td>
+        <td>${formatTokens(m.usage_today?.out_tokens || 0)}</td>
         <td>
           <div style="font-size:0.75rem">
-            ${m.windows?.daily ? `Daily: ${formatNumber(m.windows.daily.used)}/${m.windows.daily.limit || '∞'}` : '-'}
+            ${m.windows?.daily ? `${formatNumber(m.windows.daily.used)} / ${m.windows.daily.limit || '∞'}` : '-'}
           </div>
         </td>
         <td>${m.avg_latency_ms ? Math.round(m.avg_latency_ms) + ' ms' : '-'}</td>
@@ -637,7 +803,7 @@
     }
 
     if (action === 'forgive') {
-      const res = await api(`/api/models/${encodeURIComponent(key)}/forgive`, { method: 'POST' });
+      const res = await api(`api/models/${encodeURIComponent(key)}/forgive`, { method: 'POST' });
       if (res.ok) {
         notify(`Quota markers forgiven for ${key}`, 'success');
         loadStatus();
@@ -651,7 +817,7 @@
       const account = e.currentTarget.dataset.account;
       const model = e.currentTarget.dataset.model;
       notify(`Testing connection to ${provider}/${model}...`, 'info');
-      const res = await api(`/api/accounts/${encodeURIComponent(provider)}/${encodeURIComponent(account)}/test`, {
+      const res = await api(`api/accounts/${encodeURIComponent(provider)}/${encodeURIComponent(account)}/test`, {
         method: 'POST',
         body: { model }
       });
@@ -667,7 +833,7 @@
     if (action === 'toggle-disable') {
       const isDisabled = e.currentTarget.dataset.disabled === '1';
       const endpoint = isDisabled ? 'enable' : 'disable';
-      const res = await api(`/api/models/${encodeURIComponent(key)}/${endpoint}`, { method: 'POST' });
+      const res = await api(`api/models/${encodeURIComponent(key)}/${endpoint}`, { method: 'POST' });
       if (res.ok) {
         notify(`Model ${isDisabled ? 'enabled' : 'disabled'}`, 'success');
         loadStatus();
@@ -677,10 +843,23 @@
     }
   }
 
-  // --- RENDER: ROUTING & MATRIX & SIMULATOR ---
+  // --- Helper: Normalized Aliases Map ---
+  function getAliasesMap() {
+    if (!state.status || !state.status.aliases) return {};
+    if (Array.isArray(state.status.aliases)) {
+      const map = {};
+      state.status.aliases.forEach(a => {
+        if (a && a.alias) map[a.alias] = a;
+      });
+      return map;
+    }
+    return state.status.aliases;
+  }
+
+  // --- RENDER: ROUTING & MATRIX & ALIAS EDITING (Item 4) ---
   function renderRouting() {
     if (!state.status) return;
-    const aliases = state.status.aliases || {};
+    const aliases = getAliasesMap();
     const models = state.status.models || [];
 
     const container = document.getElementById('routing-aliases-grid');
@@ -691,19 +870,30 @@
       return `
         <div class="alias-card">
           <div class="alias-card-head">
-            <span class="alias-badge">${escapeHtml(aliasName)}</span>
-            <span class="text-muted" style="font-size:0.75rem">Spread: LRU across ${cfg.spread || 1}</span>
-          </div>
-          <div style="font-size:0.8rem; color:var(--text-secondary)">
-            ${aliasName === 'auto' ? 'Default text alias. Rotates across free candidates in preference order.' :
-              aliasName === 'fast' ? 'Tuned for low-latency quick responses.' :
-              aliasName === 'strong' ? 'High quality / reasoning free models.' :
-              aliasName === 'vision' ? 'Enforces vision capability requirement.' :
-              aliasName === 'extract' ? 'Context >= 24k tokens floor, strict json.' :
-              aliasName === 'local' ? 'Prefers local Ollama instances.' : 'Configured routing alias'}
+            <div>
+              <span class="alias-badge">${escapeHtml(aliasName)}</span>
+              <span class="text-muted" style="font-size:0.75rem; margin-left:0.5rem">
+                Spread: LRU across top ${cfg.spread || 1}
+              </span>
+            </div>
+            <button type="button" class="btn btn-sm" onclick="openEditAliasModal('${escapeHtml(aliasName)}')">
+              ✏️ Edit Profile
+            </button>
           </div>
 
-          <div style="font-size:0.75rem; font-weight:600; color:var(--text-muted); margin-top:0.25rem">PREFERENCE CHAIN (${preferList.length}):</div>
+          <div style="font-size:0.8rem; color:var(--text-secondary)">
+            ${aliasName === 'auto' ? 'Default text alias. Rotates across free candidates in preference order.' :
+              aliasName === 'fast' ? 'Tuned for low-latency quick responses across responsive models.' :
+              aliasName === 'strong' ? 'High quality / reasoning capable models with deep reasoning.' :
+              aliasName === 'vision' ? 'Enforces multimodal vision capability requirement.' :
+              aliasName === 'extract' ? 'Context >= 24k tokens floor, strict JSON extraction.' :
+              aliasName === 'local' ? 'Prefers local Ollama instances for private on-prem execution.' :
+              'Configured routing alias'}
+          </div>
+
+          <div style="font-size:0.75rem; font-weight:600; color:var(--text-muted); margin-top:0.25rem">
+            PREFERENCE CHAIN (${preferList.length} candidate${preferList.length !== 1 ? 's' : ''}):
+          </div>
           <div class="candidates-list">
             ${preferList.slice(0, 6).map((pref, idx) => {
               const matched = models.find(m => m.key === pref);
@@ -725,7 +915,7 @@
       `;
     }).join('');
 
-    // Populate simulator alias select
+    // Simulator alias select
     const simAlias = document.getElementById('sim-alias');
     if (simAlias && simAlias.options.length === 0) {
       Object.keys(aliases).forEach(a => {
@@ -734,6 +924,124 @@
         opt.textContent = a;
         simAlias.appendChild(opt);
       });
+    }
+  }
+
+  // --- Alias Editor Modal Logic (Item 4) ---
+  window.openEditAliasModal = function (aliasName) {
+    if (!state.status) return;
+    const cfg = getAliasesMap()[aliasName] || {};
+    state.editingAlias = {
+      name: aliasName,
+      spread: cfg.spread || 4,
+      prefer: [...(cfg.prefer || [])]
+    };
+
+    const titleEl = document.getElementById('mea-title');
+    if (titleEl) titleEl.textContent = `Edit Routing Profile: ${aliasName}`;
+
+    const spreadEl = document.getElementById('mea-spread');
+    if (spreadEl) spreadEl.value = state.editingAlias.spread;
+
+    renderEditAliasPreferList();
+
+    const modal = document.getElementById('modal-edit-alias');
+    if (modal) modal.classList.add('open');
+  };
+
+  function renderEditAliasPreferList() {
+    const listEl = document.getElementById('mea-prefer-list');
+    if (!listEl || !state.editingAlias) return;
+
+    if (state.editingAlias.prefer.length === 0) {
+      listEl.innerHTML = '<div class="text-muted" style="padding:1rem; text-align:center">No models in preference list. Add one below.</div>';
+    } else {
+      listEl.innerHTML = state.editingAlias.prefer.map((key, idx) => `
+        <div class="prefer-item-row">
+          <span>
+            <strong style="color:var(--text-muted); margin-right:6px">#${idx + 1}</strong>
+            <span class="font-mono">${escapeHtml(key)}</span>
+          </span>
+          <div style="display:flex; gap:4px">
+            <button type="button" class="btn btn-sm" onclick="moveAliasPrefer(${idx}, -1)" ${idx === 0 ? 'disabled' : ''} title="Move Up">▲</button>
+            <button type="button" class="btn btn-sm" onclick="moveAliasPrefer(${idx}, 1)" ${idx === state.editingAlias.prefer.length - 1 ? 'disabled' : ''} title="Move Down">▼</button>
+            <button type="button" class="btn btn-sm btn-danger" onclick="removeAliasPrefer(${idx})" title="Remove">✕</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // Populate add-model select with models from registry not yet in prefer list
+    const selectEl = document.getElementById('mea-add-model');
+    if (selectEl && state.status) {
+      selectEl.innerHTML = '';
+      const models = state.status.models || [];
+      const unused = models.filter(m => !state.editingAlias.prefer.includes(m.key));
+      unused.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.key;
+        opt.textContent = `${m.key} (${m.status})`;
+        selectEl.appendChild(opt);
+      });
+      const addBtn = document.getElementById('mea-add-btn');
+      if (addBtn) addBtn.disabled = unused.length === 0;
+    }
+  }
+
+  window.moveAliasPrefer = function (idx, direction) {
+    if (!state.editingAlias) return;
+    const targetIdx = idx + direction;
+    if (targetIdx < 0 || targetIdx >= state.editingAlias.prefer.length) return;
+    const temp = state.editingAlias.prefer[idx];
+    state.editingAlias.prefer[idx] = state.editingAlias.prefer[targetIdx];
+    state.editingAlias.prefer[targetIdx] = temp;
+    renderEditAliasPreferList();
+  };
+
+  window.removeAliasPrefer = function (idx) {
+    if (!state.editingAlias) return;
+    state.editingAlias.prefer.splice(idx, 1);
+    renderEditAliasPreferList();
+  };
+
+  async function saveEditedAlias() {
+    if (!state.editingAlias) return;
+    const spreadInput = document.getElementById('mea-spread');
+    const spreadVal = parseInt(spreadInput?.value || '4', 10);
+    if (isNaN(spreadVal) || spreadVal < 1) {
+      alert('Spread must be a positive integer (min 1).');
+      return;
+    }
+
+    if (state.editingAlias.prefer.length === 0) {
+      alert('Preference list cannot be empty. Add at least one model.');
+      return;
+    }
+
+    const saveBtn = document.getElementById('mea-save-btn');
+    if (saveBtn) saveBtn.disabled = true;
+
+    try {
+      const res = await api(`api/aliases/${encodeURIComponent(state.editingAlias.name)}`, {
+        method: 'PUT',
+        body: {
+          prefer: state.editingAlias.prefer,
+          spread: spreadVal
+        }
+      });
+
+      if (res.ok) {
+        notify(`Profile '${state.editingAlias.name}' updated and registry reloaded!`, 'success');
+        document.getElementById('modal-edit-alias')?.classList.remove('open');
+        await loadStatus();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        alert(`Failed to save alias: ${err.detail || res.statusText}`);
+      }
+    } catch (e) {
+      alert(`Network error saving alias: ${e.message}`);
+    } finally {
+      if (saveBtn) saveBtn.disabled = false;
     }
   }
 
@@ -746,12 +1054,11 @@
     const reqReasoning = document.getElementById('sim-req-reasoning')?.checked;
 
     const models = state.status.models || [];
-    const aliasCfg = state.status.aliases?.[aliasName] || {};
+    const aliasCfg = getAliasesMap()[aliasName] || {};
     const preferList = aliasCfg.prefer || [];
 
     const candidates = [];
 
-    // Filter models
     for (const m of models) {
       if (m.disabled) {
         candidates.push({ model: m, eligible: false, reason: 'disabled' });
@@ -787,7 +1094,6 @@
         continue;
       }
 
-      // Ranked by prefer position
       const prefIdx = preferList.indexOf(m.key);
       const rank = prefIdx >= 0 ? prefIdx : 999;
       candidates.push({ model: m, eligible: true, rank });
@@ -837,10 +1143,9 @@
     const currentVal = select.value;
     select.innerHTML = '';
 
-    // Aliases group
     const aliasGroup = document.createElement('optgroup');
     aliasGroup.label = 'Aliases (Auto-Routed)';
-    Object.keys(state.status.aliases || {}).forEach(a => {
+    Object.keys(getAliasesMap()).forEach(a => {
       const opt = document.createElement('option');
       opt.value = a;
       opt.textContent = `${a} (alias)`;
@@ -848,7 +1153,6 @@
     });
     select.appendChild(aliasGroup);
 
-    // Specific models group
     const modelGroup = document.createElement('optgroup');
     modelGroup.label = 'Registered Models (Pinned)';
     const models = state.status.models || [];
@@ -865,7 +1169,6 @@
 
   async function sendPlaygroundPrompt() {
     if (state.playground.inFlight) {
-      // Cancel current
       if (state.playground.abortController) {
         state.playground.abortController.abort();
       }
@@ -883,7 +1186,6 @@
     const systemPrompt = document.getElementById('playground-system')?.value?.trim();
     const isStream = document.getElementById('playground-stream-toggle')?.checked ?? true;
 
-    // Headers
     const reqHeaders = {
       'Content-Type': 'application/json',
       'X-Hub-App': appHeader
@@ -893,14 +1195,12 @@
     const chatContainer = document.getElementById('playground-chat');
     if (!chatContainer) return;
 
-    // Add user bubble
     const userMsg = document.createElement('div');
     userMsg.className = 'message-bubble message-user';
     userMsg.textContent = text;
     chatContainer.appendChild(userMsg);
     promptInput.value = '';
 
-    // Add assistant bubble with thinking area and content area
     const assistantMsg = document.createElement('div');
     assistantMsg.className = 'message-bubble message-assistant streaming-cursor';
     assistantMsg.innerHTML = `
@@ -1002,7 +1302,6 @@
               if (delta) {
                 if (!firstTokenTime) firstTokenTime = performance.now();
 
-                // Check reasoning
                 const r = delta.reasoning || delta.reasoning_content;
                 if (r) {
                   accumulatedReasoning += r;
@@ -1011,7 +1310,6 @@
                   chatContainer.scrollTop = chatContainer.scrollHeight;
                 }
 
-                // Check content
                 if (delta.content) {
                   accumulatedContent += delta.content;
                   streamContent.textContent = accumulatedContent;
@@ -1019,7 +1317,7 @@
                 }
               }
             } catch (e) {
-              // Ignore line parse errors
+              // Ignore line parse error
             }
           }
         }
@@ -1063,7 +1361,7 @@
     document.getElementById('tel-tokens').textContent = `${data.promptTokens} in / ${data.completionTokens} out`;
   }
 
-  // --- RENDER: ACCOUNTS TAB ---
+  // --- RENDER: ACCOUNTS TAB (Items 3, 5 & 6) ---
   function renderAccounts() {
     const container = document.getElementById('accounts-list-content');
     if (!container || !state.status) return;
@@ -1074,57 +1372,171 @@
       return;
     }
 
-    container.innerHTML = `
-      <div class="accounts-grid">
-        ${accounts.map(acc => {
-          const keyStatus = acc.key_present
-            ? '<span class="status-badge status-ready">🔑 Key Set</span>'
-            : acc.kind === 'cli'
-            ? '<span class="status-badge" style="background:rgba(192,132,252,0.15); color:var(--cap-vision)">CLI Auth</span>'
-            : '<span class="status-badge status-depleted">⚠️ No Key</span>';
+    if (state.views.accounts === 'cards') {
+      container.innerHTML = `
+        <div class="accounts-grid">
+          ${accounts.map(acc => {
+            const keyStatus = acc.key_present
+              ? '<span class="status-badge status-ready">🔑 Key Set</span>'
+              : acc.kind === 'cli'
+              ? '<span class="status-badge" style="background:rgba(192,132,252,0.15); color:var(--cap-vision)">CLI Auth</span>'
+              : '<span class="status-badge status-depleted">⚠️ No Key</span>';
 
-          return `
-            <div class="account-card">
-              <div class="account-card-head">
+            const lastProbe = acc.last_checked_at
+              ? `${formatTimeAgo(acc.last_checked_at)} (${acc.last_status || 'unknown'})`
+              : 'Never probed';
+
+            return `
+              <div class="account-card">
+                <div class="account-card-head">
+                  <div>
+                    <span class="model-provider">${escapeHtml(acc.provider)}</span>
+                    <div style="font-weight:700; font-size:1.05rem">${escapeHtml(acc.account)}</div>
+                    <div class="text-muted" style="font-size:0.75rem">${escapeHtml(acc.base_url || acc.command || 'custom')}</div>
+                  </div>
+                  ${keyStatus}
+                </div>
+
                 <div>
-                  <span class="model-provider">${escapeHtml(acc.provider)}</span>
-                  <div style="font-weight:700; font-size:1.05rem">${escapeHtml(acc.account)}</div>
-                  <div class="text-muted" style="font-size:0.75rem">${escapeHtml(acc.base_url || acc.command || 'custom')}</div>
+                  <div style="font-size:0.75rem; font-weight:600; color:var(--text-muted); margin-bottom:4px">
+                    REGISTERED MODELS (${(acc.models || []).length}):
+                  </div>
+                  <div class="account-models-list">
+                    ${(acc.models || []).map(m => `<span class="cap-tag">${escapeHtml(m)}</span>`).join('')}
+                  </div>
                 </div>
-                ${keyStatus}
-              </div>
 
-              <div>
-                <div style="font-size:0.75rem; font-weight:600; color:var(--text-muted); margin-bottom:4px">
-                  REGISTERED MODELS (${(acc.models || []).length}):
+                <div style="font-size:0.75rem; color:var(--text-secondary); background:var(--bg-input); padding:4px 8px; border-radius:4px">
+                  <span>🛡️ Last Health Probe: <strong>${escapeHtml(lastProbe)}</strong></span>
+                  ${acc.last_error ? `<div style="color:var(--status-depleted); margin-top:2px">⚠️ ${escapeHtml(acc.last_error)}</div>` : ''}
                 </div>
-                <div class="account-models-list">
-                  ${(acc.models || []).map(m => `<span class="cap-tag">${escapeHtml(m)}</span>`).join('')}
-                </div>
-              </div>
 
-              <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid var(--border-subtle)">
-                <span class="text-muted" style="font-size:0.75rem">Env: <code>${escapeHtml(acc.api_key_env || 'none')}</code></span>
-                <div style="display:flex; gap:6px">
-                  <button type="button" class="btn btn-sm" onclick="testAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">⚡ Test</button>
-                  <button type="button" class="btn btn-sm" onclick="discoverAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">🔍 Discover</button>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid var(--border-subtle)">
+                  <span class="text-muted" style="font-size:0.75rem">Env: <code>${escapeHtml(acc.api_key_env || 'none')}</code></span>
+                  <div style="display:flex; gap:6px">
+                    <button type="button" class="btn btn-sm" onclick="testAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">⚡ Test</button>
+                    <button type="button" class="btn btn-sm" onclick="discoverAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">🔍 Discover</button>
+                  </div>
                 </div>
               </div>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    `;
+            `;
+          }).join('')}
+        </div>
+      `;
+    } else {
+      const sorted = applySort(accounts, 'accounts', (acc, col) => {
+        if (col === 'provider') return acc.provider;
+        if (col === 'account') return acc.account;
+        if (col === 'kind') return acc.kind;
+        if (col === 'key') return acc.key_present ? 1 : 0;
+        if (col === 'models') return (acc.models || []).length;
+        if (col === 'last_checked_at') return acc.last_checked_at || '';
+        if (col === 'status') return acc.last_status || '';
+        return acc[col];
+      });
+
+      container.innerHTML = `
+        <div class="table-container">
+          <table class="table">
+            <thead>
+              <tr>
+                ${renderSortHeader('accounts', 'provider', 'Provider')}
+                ${renderSortHeader('accounts', 'account', 'Account ID')}
+                ${renderSortHeader('accounts', 'kind', 'Kind')}
+                ${renderSortHeader('accounts', 'key', 'Key Status')}
+                ${renderSortHeader('accounts', 'models', 'Models')}
+                <th>Base URL / Command</th>
+                ${renderSortHeader('accounts', 'last_checked_at', 'Last Health Probe')}
+                ${renderSortHeader('accounts', 'status', 'Health Status')}
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sorted.map(acc => {
+                const keyStatus = acc.key_present
+                  ? '<span class="status-badge status-ready">🔑 Set</span>'
+                  : acc.kind === 'cli'
+                  ? '<span class="status-badge" style="background:rgba(192,132,252,0.15); color:var(--cap-vision)">CLI</span>'
+                  : '<span class="status-badge status-depleted">⚠️ No Key</span>';
+
+                const probeStatus = acc.last_status === 'ok'
+                  ? '<span class="status-badge status-ready">OK</span>'
+                  : acc.last_status === 'failed'
+                  ? '<span class="status-badge status-depleted">Failed</span>'
+                  : '<span class="status-badge status-disabled">Unchecked</span>';
+
+                return `
+                  <tr>
+                    <td><span class="cap-tag">${escapeHtml(acc.provider)}</span></td>
+                    <td style="font-weight:600">${escapeHtml(acc.account)}</td>
+                    <td class="text-secondary">${escapeHtml(acc.kind || 'http')}</td>
+                    <td>${keyStatus}</td>
+                    <td style="font-weight:600">${(acc.models || []).length}</td>
+                    <td class="font-mono text-muted" style="font-size:0.75rem">${escapeHtml(acc.base_url || acc.command || '-')}</td>
+                    <td class="text-muted" style="font-size:0.78rem">${escapeHtml(formatTimeAgo(acc.last_checked_at))}</td>
+                    <td>${probeStatus}</td>
+                    <td>
+                      <div style="display:flex; gap:4px">
+                        <button type="button" class="btn btn-sm" onclick="testAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">⚡ Test</button>
+                        <button type="button" class="btn btn-sm" onclick="discoverAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">🔍 Discover</button>
+                      </div>
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
   }
+
+  // --- Availability Health Sweep (Item 6) ---
+  window.runAvailabilitySweep = async function () {
+    const btn1 = document.getElementById('btn-health-sweep');
+    const btn2 = document.getElementById('btn-run-sweep-accounts');
+    if (btn1) { btn1.disabled = true; btn1.textContent = '⏳ Checking...'; }
+    if (btn2) { btn2.disabled = true; btn2.textContent = '⏳ Checking...'; }
+
+    notify('Starting paced availability sweep (1 probe/active account)...', 'info');
+
+    try {
+      const res = await api('api/health/sweep', { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        const probed = data.probed_count || 0;
+        const skipped = data.skipped_count || 0;
+        const results = data.results || [];
+        const passed = results.filter(r => r.ok).length;
+        const failed = results.filter(r => !r.ok).length;
+
+        notify(`Sweep completed: ${probed} checked (${passed} ok, ${failed} failed). Skipped ${skipped} inactive/exhausted.`, 'success');
+
+        const summaryText = document.getElementById('sweep-summary-text');
+        if (summaryText) {
+          summaryText.innerHTML = `Last sweep completed just now: <strong>${passed}/${probed} accounts verified</strong> (skipped ${skipped}).`;
+        }
+        await loadStatus();
+      } else {
+        notify('Health sweep failed: HTTP ' + res.status, 'error');
+      }
+    } catch (e) {
+      notify('Health sweep request error: ' + e.message, 'error');
+    } finally {
+      if (btn1) { btn1.disabled = false; btn1.textContent = '⚡ Check Availability'; }
+      if (btn2) { btn2.disabled = false; btn2.textContent = '⚡ Run Availability Sweep'; }
+    }
+  };
 
   window.testAccount = async function (provider, account) {
     notify(`Testing connection to ${provider}/${account}...`, 'info');
-    const res = await api(`/api/accounts/${encodeURIComponent(provider)}/${encodeURIComponent(account)}/test`, {
+    const res = await api(`api/accounts/${encodeURIComponent(provider)}/${encodeURIComponent(account)}/test`, {
       method: 'POST'
     });
     if (res.ok) {
       const json = await res.json();
       notify(`Connection OK! Model: ${json.model}, latency: ${json.latency_ms} ms`, 'success');
+      loadStatus();
     } else {
       const err = await res.json().catch(() => ({}));
       notify(`Test failed: ${err.detail || res.statusText}`, 'error');
@@ -1133,7 +1545,7 @@
 
   window.discoverAccount = async function (provider, account) {
     notify(`Discovering models for ${provider}...`, 'info');
-    const res = await api(`/api/providers/${encodeURIComponent(provider)}/discover`, {
+    const res = await api(`api/providers/${encodeURIComponent(provider)}/discover`, {
       method: 'POST',
       body: { account_id: account }
     });
@@ -1148,7 +1560,7 @@
     }
   };
 
-  // --- RENDER: QUEUE & APPS ---
+  // --- RENDER: QUEUE & JOBS (Items 3 & 5) ---
   function renderJobs() {
     const jobs = state.jobs || [];
     const depth = state.queueDepth || {};
@@ -1176,13 +1588,14 @@
       `;
     }
 
-    // App shares control bar
     const listEl = document.getElementById('queue-jobs-list');
     if (!listEl) return;
 
     const appsHtml = apps.length > 0 ? `
       <div style="margin-bottom:1.25rem">
-        <h3 style="font-size:0.9rem; font-weight:600; margin-bottom:0.6rem; color:var(--text-secondary)">Connected Applications & Fair-Share Queue Control:</h3>
+        <h3 style="font-size:0.9rem; font-weight:600; margin-bottom:0.6rem; color:var(--text-secondary)">
+          Connected Applications & Fair-Share Queue Control:
+        </h3>
         <div class="app-shares-row">
           ${apps.map(a => `
             <div class="app-share-card">
@@ -1201,43 +1614,83 @@
       </div>
     ` : '';
 
-    const jobsTableHtml = jobs.length === 0 ? `
-      <div class="text-muted" style="padding: 2rem; text-align:center">No active or pending jobs in queue.</div>
-    ` : `
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Job ID</th>
-            <th>App</th>
-            <th>Model</th>
-            <th>State</th>
-            <th>Created</th>
-            <th>Action</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${jobs.map(j => `
-            <tr>
-              <td class="font-mono">${escapeHtml(j.id)}</td>
-              <td><span class="cap-tag">${escapeHtml(j.app)}</span></td>
-              <td class="font-mono">${escapeHtml(j.model || j.alias || 'auto')}</td>
-              <td><span class="status-badge status-${j.state === 'running' ? 'ready' : j.state === 'waiting_quota' ? 'cooldown' : 'disabled'}">${escapeHtml(j.state)}</span></td>
-              <td class="text-muted">${formatCountdown(j.created_at)} ago</td>
-              <td>
-                <button type="button" class="btn btn-sm btn-danger" onclick="cancelJob('${j.id}')">Cancel</button>
-              </td>
-            </tr>
-          `).join('')}
-        </tbody>
-      </table>
-    `;
+    let jobsContentHtml = '';
 
-    listEl.innerHTML = appsHtml + jobsTableHtml;
+    if (jobs.length === 0) {
+      jobsContentHtml = '<div class="text-muted" style="padding: 2rem; text-align:center">No active or pending jobs in queue.</div>';
+    } else if (state.views.queue === 'cards') {
+      jobsContentHtml = `
+        <div class="jobs-grid">
+          ${jobs.map(j => `
+            <div class="model-card">
+              <div class="model-card-head">
+                <div>
+                  <span class="cap-tag">${escapeHtml(j.app || 'app')}</span>
+                  <div class="font-mono" style="font-weight:600; margin-top:2px">${escapeHtml(j.id)}</div>
+                </div>
+                <span class="status-badge status-${j.state === 'running' ? 'ready' : j.state === 'waiting_quota' ? 'cooldown' : 'disabled'}">
+                  ${escapeHtml(j.state)}
+                </span>
+              </div>
+              <div style="font-size:0.82rem; color:var(--text-secondary)">
+                Target: <strong class="font-mono">${escapeHtml(j.model || j.alias || 'auto')}</strong>
+              </div>
+              <div class="model-card-footer">
+                <span class="text-muted" style="font-size:0.75rem">${formatTimeAgo(j.created_at)}</span>
+                <button type="button" class="btn btn-sm btn-danger" onclick="cancelJob('${escapeHtml(j.id)}')">Cancel</button>
+              </div>
+            </div>
+          `).join('')}
+        </div>
+      `;
+    } else {
+      const sorted = applySort(jobs, 'queue', (j, col) => {
+        if (col === 'id') return j.id;
+        if (col === 'app') return j.app;
+        if (col === 'model') return j.model || j.alias || '';
+        if (col === 'state') return j.state;
+        if (col === 'created_at') return j.created_at || '';
+        return j[col];
+      });
+
+      jobsContentHtml = `
+        <div class="table-container">
+          <table class="table">
+            <thead>
+              <tr>
+                ${renderSortHeader('queue', 'id', 'Job ID')}
+                ${renderSortHeader('queue', 'app', 'App')}
+                ${renderSortHeader('queue', 'model', 'Target Model')}
+                ${renderSortHeader('queue', 'state', 'State')}
+                ${renderSortHeader('queue', 'created_at', 'Created')}
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sorted.map(j => `
+                <tr>
+                  <td class="font-mono">${escapeHtml(j.id)}</td>
+                  <td><span class="cap-tag">${escapeHtml(j.app)}</span></td>
+                  <td class="font-mono">${escapeHtml(j.model || j.alias || 'auto')}</td>
+                  <td><span class="status-badge status-${j.state === 'running' ? 'ready' : j.state === 'waiting_quota' ? 'cooldown' : 'disabled'}">${escapeHtml(j.state)}</span></td>
+                  <td class="text-muted">${formatTimeAgo(j.created_at)}</td>
+                  <td>
+                    <button type="button" class="btn btn-sm btn-danger" onclick="cancelJob('${escapeHtml(j.id)}')">Cancel</button>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    listEl.innerHTML = appsHtml + jobsContentHtml;
   }
 
   window.toggleAppPause = async function (appName, isPaused) {
     const endpoint = isPaused ? 'resume' : 'pause';
-    const res = await api(`/api/apps/${encodeURIComponent(appName)}/${endpoint}`, { method: 'POST' });
+    const res = await api(`api/apps/${encodeURIComponent(appName)}/${endpoint}`, { method: 'POST' });
     if (res.ok) {
       notify(`Application ${appName} ${isPaused ? 'resumed' : 'paused'}`, 'success');
       loadJobs();
@@ -1246,7 +1699,7 @@
     }
   };
 
-  // --- RENDER: PROMOS & SCOUT ---
+  // --- RENDER: PROMOS & SCOUT (Items 3, 5 & 7) ---
   function renderPromos() {
     const promos = state.promos || [];
     const scout = state.scoutStatus || {};
@@ -1265,46 +1718,269 @@
       `;
     }
 
+    // Populate providers in promo select filter
+    const provSelect = document.getElementById('promos-provider-select');
+    if (provSelect && provSelect.options.length <= 1) {
+      const providers = [...new Set(promos.map(p => p.provider))].sort();
+      providers.forEach(p => {
+        const opt = document.createElement('option');
+        opt.value = p;
+        opt.textContent = p;
+        provSelect.appendChild(opt);
+      });
+    }
+
+    // Filter promos
+    const filter = state.promosFilter;
+    const filtered = promos.filter(p => {
+      if (filter.status !== 'all' && p.status !== filter.status) return false;
+      if (filter.provider && p.provider !== filter.provider) return false;
+      if (filter.search) {
+        const q = filter.search.toLowerCase();
+        const str = `${p.provider} ${p.identity || ''} ${p.note || ''} ${p.url || ''} ${p.source || ''}`.toLowerCase();
+        if (!str.includes(q)) return false;
+      }
+      return true;
+    });
+
+    const countEl = document.getElementById('promos-filter-count');
+    if (countEl) countEl.textContent = `${filtered.length} of ${promos.length}`;
+
     const listEl = document.getElementById('promos-list');
     if (!listEl) return;
 
-    if (promos.length === 0) {
-      listEl.innerHTML = '<div class="text-muted" style="padding:2rem; text-align:center">No promo leads found yet. Click "Run Scout Now" above!</div>';
+    if (filtered.length === 0) {
+      listEl.innerHTML = '<div class="text-muted" style="padding:2rem; text-align:center">No promo leads match current filters.</div>';
       return;
     }
 
-    listEl.innerHTML = `
-      <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr)); gap:1rem">
-        ${promos.map(p => `
-          <div class="model-card">
-            <div class="model-card-head">
-              <div>
-                <span class="model-provider">${escapeHtml(p.provider)}</span>
-                <div style="font-weight:600">${escapeHtml(p.identity || p.provider)}</div>
+    if (state.views.promos === 'cards') {
+      listEl.innerHTML = `
+        <div class="promos-grid">
+          ${filtered.map(p => `
+            <div class="model-card">
+              <div class="model-card-head">
+                <div>
+                  <span class="model-provider">${escapeHtml(p.provider)}</span>
+                  <div style="font-weight:600">${escapeHtml(p.identity || p.provider)}</div>
+                </div>
+                <span class="status-badge status-${p.status === 'new' ? 'ready' : p.status === 'rejected' ? 'depleted' : 'disabled'}">${escapeHtml(p.status)}</span>
               </div>
-              <span class="status-badge status-${p.status === 'new' ? 'ready' : p.status === 'rejected' ? 'depleted' : 'disabled'}">${escapeHtml(p.status)}</span>
-            </div>
-            <div style="font-size:0.82rem; color:var(--text-secondary); line-height:1.4">${escapeHtml(p.note || 'Free Tier Offer')}</div>
-            ${p.url ? `<div style="font-size:0.75rem"><a href="${escapeHtml(p.url)}" target="_blank" rel="noreferrer" style="color:#38bdf8">${escapeHtml(p.url)}</a></div>` : ''}
-            ${p.rejected_reason ? `<div style="font-size:0.75rem; color:var(--status-depleted); background:var(--status-depleted-bg); padding:4px 8px; border-radius:4px">Reason: ${escapeHtml(p.rejected_reason)}</div>` : ''}
-            <div class="model-card-footer">
-              <span class="text-muted">Source: ${escapeHtml(p.source || 'scout')}</span>
-              <div style="display:flex; gap:4px">
-                ${p.status !== 'rejected' ? `
-                  <button type="button" class="btn btn-sm" onclick="openRejectModal('${p.id}')">Reject</button>
-                  <button type="button" class="btn btn-sm btn-primary" onclick="openQuickAddFromPromo('${escapeHtml(p.provider)}', '${escapeHtml(p.url || '')}')">+ Add Key</button>
-                ` : `
-                  <button type="button" class="btn btn-sm" onclick="reopenPromo('${p.id}')">Reopen</button>
-                `}
+              <div style="font-size:0.82rem; color:var(--text-secondary); line-height:1.4">${escapeHtml(p.note || 'Free Tier Offer')}</div>
+              ${p.url ? `<div style="font-size:0.75rem"><a href="${escapeHtml(p.url)}" target="_blank" rel="noreferrer" style="color:#38bdf8">${escapeHtml(p.url)}</a></div>` : ''}
+              ${p.rejected_reason ? `<div style="font-size:0.75rem; color:var(--status-depleted); background:var(--status-depleted-bg); padding:4px 8px; border-radius:4px">Reason: ${escapeHtml(p.rejected_reason)}</div>` : ''}
+              <div class="model-card-footer">
+                <span class="text-muted" style="font-size:0.72rem">Discovered: ${escapeHtml(formatTimeAgo(p.created_at))} (${escapeHtml(p.source || 'scout')})</span>
+                <div style="display:flex; gap:4px">
+                  ${p.status !== 'rejected' ? `
+                    <button type="button" class="btn btn-sm" onclick="openRejectModal('${p.id}')">Reject</button>
+                    <button type="button" class="btn btn-sm btn-primary" onclick="openQuickAddFromPromo('${escapeHtml(p.provider)}', '${escapeHtml(p.url || '')}')">+ Add Key</button>
+                  ` : `
+                    <button type="button" class="btn btn-sm" onclick="reopenPromo('${p.id}')">Reopen</button>
+                  `}
+                </div>
               </div>
             </div>
-          </div>
-        `).join('')}
-      </div>
+          `).join('')}
+        </div>
+      `;
+    } else {
+      const sorted = applySort(filtered, 'promos', (p, col) => {
+        if (col === 'provider') return p.provider;
+        if (col === 'identity') return p.identity || p.provider;
+        if (col === 'status') return p.status;
+        if (col === 'created_at') return p.created_at || '';
+        return p[col];
+      });
+
+      listEl.innerHTML = `
+        <div class="table-container">
+          <table class="table">
+            <thead>
+              <tr>
+                ${renderSortHeader('promos', 'provider', 'Provider')}
+                ${renderSortHeader('promos', 'identity', 'Identity / Key Name')}
+                ${renderSortHeader('promos', 'status', 'Status')}
+                <th>Offer Details / Note</th>
+                <th>URL</th>
+                ${renderSortHeader('promos', 'created_at', 'Discovered')}
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${sorted.map(p => `
+                <tr>
+                  <td><span class="cap-tag">${escapeHtml(p.provider)}</span></td>
+                  <td style="font-weight:600">${escapeHtml(p.identity || p.provider)}</td>
+                  <td><span class="status-badge status-${p.status === 'new' ? 'ready' : p.status === 'rejected' ? 'depleted' : 'disabled'}">${escapeHtml(p.status)}</span></td>
+                  <td style="max-width:320px; overflow:hidden; text-overflow:ellipsis; font-size:0.8rem" title="${escapeHtml(p.note || '')}">${escapeHtml(p.note || '-')}</td>
+                  <td style="font-size:0.75rem">${p.url ? `<a href="${escapeHtml(p.url)}" target="_blank" rel="noreferrer" style="color:#38bdf8">${escapeHtml(p.url)}</a>` : '-'}</td>
+                  <td class="text-muted" style="font-size:0.75rem">${formatTimeAgo(p.created_at)}</td>
+                  <td>
+                    <div style="display:flex; gap:4px">
+                      ${p.status !== 'rejected' ? `
+                        <button type="button" class="btn btn-sm" onclick="openRejectModal('${p.id}')">Reject</button>
+                        <button type="button" class="btn btn-sm btn-primary" onclick="openQuickAddFromPromo('${escapeHtml(p.provider)}', '${escapeHtml(p.url || '')}')">+ Add</button>
+                      ` : `
+                        <button type="button" class="btn btn-sm" onclick="reopenPromo('${p.id}')">Reopen</button>
+                      `}
+                    </div>
+                  </td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+  }
+
+  // --- RENDER: USAGE & ESTIMATED SAVINGS (Items 8 & 9) ---
+  function computeRowCost(r, baselineKey) {
+    const inTokens = r.in_tokens || 0;
+    const cachedTokens = r.cached_tokens || 0;
+    const regularIn = Math.max(0, inTokens - cachedTokens);
+    const outTokens = r.out_tokens || 0;
+
+    let pIn = 2.50, pCached = 1.25, pOut = 10.00;
+    if (baselineKey === 'tier_matched') {
+      const m = (r.model || r.bucket || '').toLowerCase();
+      const isMini = m.includes('flash') || m.includes('mini') || m.includes('8b') || m.includes('haiku') || m.includes('small');
+      if (isMini) {
+        pIn = 0.15; pCached = 0.075; pOut = 0.60;
+      } else {
+        pIn = 2.50; pCached = 1.25; pOut = 10.00;
+      }
+    } else {
+      const b = BASELINES[baselineKey] || BASELINES.gpt4o;
+      pIn = b.priceIn;
+      pCached = b.priceCached;
+      pOut = b.priceOut;
+    }
+
+    return ((regularIn * pIn) + (cachedTokens * pCached) + (outTokens * pOut)) / 1000000;
+  }
+
+  function renderUsage() {
+    const container = document.getElementById('usage-table-container');
+    if (!container) return;
+
+    let rows = state.usageModelRows || [];
+
+    // Filter by search query
+    if (state.usageSearch) {
+      const q = state.usageSearch.toLowerCase();
+      rows = rows.filter(r => (r.model || '').toLowerCase().includes(q));
+    }
+
+    // Compute savings totals and row costs
+    let totalIn = 0;
+    let totalCached = 0;
+    let totalOut = 0;
+    let totalReqs = 0;
+    let totalCost = 0;
+
+    rows = rows.map(r => {
+      const modelName = r.model || r.bucket || 'unknown';
+      const inTok = r.in_tokens || 0;
+      const cachedTok = r.cached_tokens || 0;
+      const outTok = r.out_tokens || 0;
+      const reqs = r.requests || 0;
+      const cost = computeRowCost({ ...r, model: modelName }, state.savingsBaseline);
+      const totalTok = inTok + outTok;
+
+      totalIn += inTok;
+      totalCached += cachedTok;
+      totalOut += outTok;
+      totalReqs += reqs;
+      totalCost += cost;
+
+      return {
+        ...r,
+        model: modelName,
+        in_tokens: inTok,
+        cached_tokens: cachedTok,
+        out_tokens: outTok,
+        total_tokens: totalTok,
+        requests: reqs,
+        est_cost: cost
+      };
+    });
+
+    // Update headline savings
+    const headlineEl = document.getElementById('savings-headline-amount');
+    if (headlineEl) {
+      headlineEl.textContent = `$${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+
+    const descEl = document.getElementById('savings-baseline-description');
+    if (descEl) {
+      descEl.innerHTML = BASELINES[state.savingsBaseline]?.desc || BASELINES.gpt4o.desc;
+    }
+
+    if (rows.length === 0) {
+      container.innerHTML = '<div class="text-muted" style="padding:2rem; text-align:center">No token usage recorded for the selected period.</div>';
+      return;
+    }
+
+    // Sort usage rows
+    const sorted = applySort(rows, 'usage', (r, col) => {
+      if (col === 'model') return r.model || '';
+      if (col === 'in_tokens') return r.in_tokens;
+      if (col === 'cached_tokens') return r.cached_tokens;
+      if (col === 'out_tokens') return r.out_tokens;
+      if (col === 'total_tokens') return r.total_tokens;
+      if (col === 'requests') return r.requests;
+      if (col === 'est_cost') return r.est_cost;
+      return r[col];
+    });
+
+    container.innerHTML = `
+      <table class="table">
+        <thead>
+          <tr>
+            ${renderSortHeader('usage', 'model', 'Model Target')}
+            ${renderSortHeader('usage', 'in_tokens', 'Input Tokens')}
+            ${renderSortHeader('usage', 'cached_tokens', 'Cached Tokens')}
+            ${renderSortHeader('usage', 'out_tokens', 'Output Tokens')}
+            ${renderSortHeader('usage', 'total_tokens', 'Total Tokens')}
+            ${renderSortHeader('usage', 'requests', 'Total Requests')}
+            ${renderSortHeader('usage', 'est_cost', 'Est. Baseline Cost')}
+          </tr>
+        </thead>
+        <tbody>
+          ${sorted.map(r => `
+            <tr>
+              <td class="font-mono" style="font-weight:600">${escapeHtml(r.model)}</td>
+              <td>${formatTokens(r.in_tokens)}</td>
+              <td class="text-muted">${formatTokens(r.cached_tokens)}</td>
+              <td>${formatTokens(r.out_tokens)}</td>
+              <td style="font-weight:600">${formatTokens(r.total_tokens)}</td>
+              <td>${formatNumber(r.requests)}</td>
+              <td style="font-weight:700; color:var(--status-ready)">
+                $${r.est_cost < 0.01 && r.est_cost > 0 ? r.est_cost.toFixed(4) : r.est_cost.toFixed(2)}
+              </td>
+            </tr>
+          `).join('')}
+        </tbody>
+        <tfoot style="border-top:2px solid var(--border-strong); font-weight:700">
+          <tr>
+            <td>Total (${rows.length} models)</td>
+            <td>${formatTokens(totalIn)}</td>
+            <td class="text-muted">${formatTokens(totalCached)}</td>
+            <td>${formatTokens(totalOut)}</td>
+            <td>${formatTokens(totalIn + totalOut)}</td>
+            <td>${formatNumber(totalReqs)}</td>
+            <td style="color:var(--status-ready); font-size:1.05rem">
+              $${totalCost.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+            </td>
+          </tr>
+        </tfoot>
+      </table>
     `;
   }
 
-  // --- RENDER: EVENTS & USAGE ---
+  // --- RENDER: EVENTS LOG ---
   function renderEvents() {
     const events = state.events || [];
     const listEl = document.getElementById('events-list');
@@ -1329,7 +2005,7 @@
         <tbody>
           ${events.map(ev => `
             <tr>
-              <td class="text-muted" style="font-size:0.75rem">${formatCountdown(ev.created_at)} ago</td>
+              <td class="text-muted" style="font-size:0.75rem">${formatTimeAgo(ev.created_at)}</td>
               <td><span class="status-badge status-${ev.kind === 'quota' ? 'depleted' : ev.kind === 'retry' ? 'cooldown' : 'disabled'}">${escapeHtml(ev.kind)}</span></td>
               <td class="font-mono">${escapeHtml(ev.model || '-')}</td>
               <td><span class="cap-tag">${escapeHtml(ev.app || '-')}</span></td>
@@ -1340,48 +2016,6 @@
           `).join('')}
         </tbody>
       </table>
-    `;
-  }
-
-  function renderUsage() {
-    const container = document.getElementById('usage-chart-container');
-    if (!container || !state.usage) return;
-
-    const rows = state.usage.rows || [];
-    if (rows.length === 0) {
-      container.innerHTML = '<div class="text-muted" style="padding:2rem; text-align:center">No historical usage data recorded yet.</div>';
-      return;
-    }
-
-    const maxTokens = Math.max(...rows.map(r => (r.out_tokens || 0) + (r.in_tokens || 0)), 1000);
-    const width = 800;
-    const height = 180;
-    const barWidth = Math.max(12, Math.floor((width - 60) / (rows.length * 2)));
-
-    const bars = rows.slice(-14).map((r, idx) => {
-      const total = (r.out_tokens || 0) + (r.in_tokens || 0);
-      const barHeight = Math.max(4, Math.round((total / maxTokens) * (height - 40)));
-      const x = idx * (barWidth * 2) + 30;
-      const y = height - barHeight - 20;
-      const label = (r.day || '').slice(5);
-      return `
-        <rect x="${x}" y="${y}" width="${barWidth}" height="${barHeight}" rx="4" fill="url(#chartGrad)">
-          <title>${r.day}: ${formatTokens(total)} tokens (${formatNumber(r.requests)} reqs)</title>
-        </rect>
-        <text x="${x + barWidth/2}" y="${height - 5}" font-size="10" fill="var(--text-muted)" text-anchor="middle">${label}</text>
-      `;
-    }).join('');
-
-    container.innerHTML = `
-      <svg viewBox="0 0 ${width} ${height}" style="width:100%; height:auto; display:block">
-        <defs>
-          <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stop-color="#6366f1" />
-            <stop offset="100%" stop-color="#38bdf8" />
-          </linearGradient>
-        </defs>
-        ${bars}
-      </svg>
     `;
   }
 
@@ -1399,17 +2033,17 @@
       <div class="live-call-item">
         <div style="display:flex; justify-content:space-between; align-items:center">
           <span style="font-weight:600; color:var(--accent-primary)">${escapeHtml(c.app)}</span>
-          <button type="button" class="btn btn-sm btn-danger" onclick="cancelCall('${c.call_id}')">Kill</button>
+          <button type="button" class="btn btn-sm btn-danger" onclick="cancelCall('${escapeHtml(c.call_id)}')">Kill</button>
         </div>
         <div class="font-mono" style="font-size:0.75rem">${escapeHtml(c.model)}</div>
-        <div class="text-muted" style="font-size:0.72rem">State: ${c.state} • Running for ${Math.round(c.elapsed_s || 0)}s</div>
+        <div class="text-muted" style="font-size:0.72rem">State: ${escapeHtml(c.state)} • Running for ${Math.round(c.elapsed_s || 0)}s</div>
       </div>
     `).join('');
   }
 
   // --- Global Exposed Actions ---
   window.cancelCall = async function (callId) {
-    const res = await api(`/api/live/${callId}/cancel`, { method: 'POST' });
+    const res = await api(`api/live/${encodeURIComponent(callId)}/cancel`, { method: 'POST' });
     if (res.ok) {
       notify('Call cancelled', 'success');
       loadLive();
@@ -1419,7 +2053,7 @@
   window.triggerScoutRun = async function () {
     const btn = document.getElementById('run-scout-btn');
     if (btn) btn.disabled = true;
-    const res = await api('/api/scout/run', { method: 'POST' });
+    const res = await api('api/scout/run', { method: 'POST' });
     if (res.status === 202) {
       notify('Scout run initiated in background', 'success');
     } else if (res.status === 409) {
@@ -1431,7 +2065,7 @@
   };
 
   window.cancelJob = async function (jobId) {
-    const res = await api(`/jobs/${jobId}`, { method: 'DELETE' });
+    const res = await api(`jobs/${encodeURIComponent(jobId)}`, { method: 'DELETE' });
     if (res.ok) {
       notify(`Job ${jobId} cancelled`, 'success');
       loadJobs();
@@ -1446,7 +2080,7 @@
       if (reason) alert('Rejection reason must be at least 8 characters.');
       return;
     }
-    api(`/api/promos/${promoId}/reject`, {
+    api(`api/promos/${encodeURIComponent(promoId)}/reject`, {
       method: 'POST',
       body: { reason: reason.trim() }
     }).then(res => {
@@ -1460,7 +2094,7 @@
   };
 
   window.reopenPromo = function (promoId) {
-    api(`/api/promos/${promoId}/reopen`, { method: 'POST' }).then(res => {
+    api(`api/promos/${encodeURIComponent(promoId)}/reopen`, { method: 'POST' }).then(res => {
       if (res.ok) {
         notify('Promo reopened', 'success');
         loadPromos();
@@ -1527,20 +2161,129 @@
       renderModels();
     });
 
+    // View Switchers (Item 5)
+    // 1. Models view
+    const initModelsView = state.views.models;
+    document.getElementById('models-view-grid')?.classList.toggle('active', initModelsView === 'cards');
+    document.getElementById('models-view-table')?.classList.toggle('active', initModelsView === 'table');
+
     document.getElementById('models-view-grid')?.addEventListener('click', () => {
-      state.modelsFilter.view = 'grid';
-      localStorage.setItem('llmhub_models_view', 'grid');
+      state.views.models = 'cards';
+      localStorage.setItem('llmhub_view_models', 'cards');
       document.getElementById('models-view-grid')?.classList.add('active');
       document.getElementById('models-view-table')?.classList.remove('active');
       renderModels();
     });
 
     document.getElementById('models-view-table')?.addEventListener('click', () => {
-      state.modelsFilter.view = 'table';
-      localStorage.setItem('llmhub_models_view', 'table');
+      state.views.models = 'table';
+      localStorage.setItem('llmhub_view_models', 'table');
       document.getElementById('models-view-table')?.classList.add('active');
       document.getElementById('models-view-grid')?.classList.remove('active');
       renderModels();
+    });
+
+    // 2. Queue view
+    const initQueueView = state.views.queue;
+    document.getElementById('queue-view-table')?.classList.toggle('active', initQueueView === 'table');
+    document.getElementById('queue-view-cards')?.classList.toggle('active', initQueueView === 'cards');
+
+    document.getElementById('queue-view-table')?.addEventListener('click', () => {
+      state.views.queue = 'table';
+      localStorage.setItem('llmhub_view_queue', 'table');
+      document.getElementById('queue-view-table')?.classList.add('active');
+      document.getElementById('queue-view-cards')?.classList.remove('active');
+      renderJobs();
+    });
+
+    document.getElementById('queue-view-cards')?.addEventListener('click', () => {
+      state.views.queue = 'cards';
+      localStorage.setItem('llmhub_view_queue', 'cards');
+      document.getElementById('queue-view-cards')?.classList.add('active');
+      document.getElementById('queue-view-table')?.classList.remove('active');
+      renderJobs();
+    });
+
+    // 3. Accounts view
+    const initAccountsView = state.views.accounts;
+    document.getElementById('accounts-view-cards')?.classList.toggle('active', initAccountsView === 'cards');
+    document.getElementById('accounts-view-table')?.classList.toggle('active', initAccountsView === 'table');
+
+    document.getElementById('accounts-view-cards')?.addEventListener('click', () => {
+      state.views.accounts = 'cards';
+      localStorage.setItem('llmhub_view_accounts', 'cards');
+      document.getElementById('accounts-view-cards')?.classList.add('active');
+      document.getElementById('accounts-view-table')?.classList.remove('active');
+      renderAccounts();
+    });
+
+    document.getElementById('accounts-view-table')?.addEventListener('click', () => {
+      state.views.accounts = 'table';
+      localStorage.setItem('llmhub_view_accounts', 'table');
+      document.getElementById('accounts-view-table')?.classList.add('active');
+      document.getElementById('accounts-view-cards')?.classList.remove('active');
+      renderAccounts();
+    });
+
+    // 4. Promos view
+    const initPromosView = state.views.promos;
+    document.getElementById('promos-view-cards')?.classList.toggle('active', initPromosView === 'cards');
+    document.getElementById('promos-view-table')?.classList.toggle('active', initPromosView === 'table');
+
+    document.getElementById('promos-view-cards')?.addEventListener('click', () => {
+      state.views.promos = 'cards';
+      localStorage.setItem('llmhub_view_promos', 'cards');
+      document.getElementById('promos-view-cards')?.classList.add('active');
+      document.getElementById('promos-view-table')?.classList.remove('active');
+      renderPromos();
+    });
+
+    document.getElementById('promos-view-table')?.addEventListener('click', () => {
+      state.views.promos = 'table';
+      localStorage.setItem('llmhub_view_promos', 'table');
+      document.getElementById('promos-view-table')?.classList.add('active');
+      document.getElementById('promos-view-cards')?.classList.remove('active');
+      renderPromos();
+    });
+
+    // Promos Filters (Item 7)
+    document.querySelectorAll('#promos-status-chips .filter-chip').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        document.querySelectorAll('#promos-status-chips .filter-chip').forEach(c => c.classList.remove('active'));
+        e.currentTarget.classList.add('active');
+        state.promosFilter.status = e.currentTarget.dataset.status;
+        renderPromos();
+      });
+    });
+
+    document.getElementById('promos-provider-select')?.addEventListener('change', (e) => {
+      state.promosFilter.provider = e.target.value;
+      renderPromos();
+    });
+
+    document.getElementById('promos-search-input')?.addEventListener('input', (e) => {
+      state.promosFilter.search = e.target.value;
+      renderPromos();
+    });
+
+    // Usage Filters & Baseline Controls (Items 8 & 9)
+    document.querySelectorAll('#usage-period-chips .filter-chip').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        document.querySelectorAll('#usage-period-chips .filter-chip').forEach(c => c.classList.remove('active'));
+        e.currentTarget.classList.add('active');
+        state.usagePeriod = e.currentTarget.dataset.period;
+        loadUsage();
+      });
+    });
+
+    document.getElementById('savings-baseline-select')?.addEventListener('change', (e) => {
+      state.savingsBaseline = e.target.value;
+      renderUsage();
+    });
+
+    document.getElementById('usage-search-input')?.addEventListener('input', (e) => {
+      state.usageSearch = e.target.value;
+      renderUsage();
     });
 
     // Playground interactions
@@ -1569,7 +2312,7 @@
       document.getElementById('modal-quick-add')?.classList.add('open');
     });
     document.getElementById('btn-reload-registry')?.addEventListener('click', async () => {
-      const res = await api('/api/registry/reload', { method: 'POST' });
+      const res = await api('api/registry/reload', { method: 'POST' });
       if (res.ok) {
         notify('Registry reloaded from ~/.llmhub/providers.yaml', 'success');
         loadStatus();
@@ -1596,7 +2339,7 @@
         return;
       }
       notify('Testing and adding provider...', 'info');
-      const res = await api('/api/accounts/quick', {
+      const res = await api('api/accounts/quick', {
         method: 'POST',
         body: { api_key: key || undefined, source }
       });
@@ -1610,6 +2353,19 @@
       }
     });
 
+    // Edit Alias Modal Listeners
+    document.getElementById('mea-add-btn')?.addEventListener('click', () => {
+      const select = document.getElementById('mea-add-model');
+      const val = select?.value;
+      if (val && state.editingAlias && !state.editingAlias.prefer.includes(val)) {
+        state.editingAlias.prefer.push(val);
+        renderEditAliasPreferList();
+      }
+    });
+
+    document.getElementById('mea-save-btn')?.addEventListener('click', saveEditedAlias);
+
+    // Modal Close
     document.querySelectorAll('.modal-close').forEach(btn => {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.modal-backdrop').forEach(m => m.classList.remove('open'));

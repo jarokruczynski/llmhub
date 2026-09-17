@@ -250,6 +250,25 @@ def account_rows(hub: Hub) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for provider_name, provider in hub.registry.providers.items():
         for account in provider.accounts:
+            last_ok: str | None = None
+            last_err: str | None = None
+            last_err_msg: str | None = None
+            for model in provider.models:
+                stats = hub.store.model_stats(account.id, f"{provider_name}/{model.id}")
+                if stats.get("last_ok_at") and (not last_ok or str(stats["last_ok_at"]) > last_ok):
+                    last_ok = str(stats["last_ok_at"])
+                if stats.get("last_error_at") and (not last_err or str(stats["last_error_at"]) > last_err):
+                    last_err = str(stats["last_error_at"])
+                    last_err_msg = stats.get("last_error")
+
+            last_checked = max((ts for ts in (last_ok, last_err) if ts is not None), default=None)
+            if last_checked is None:
+                last_status = "never_checked"
+            elif last_ok and (not last_err or last_ok >= last_err):
+                last_status = "ok"
+            else:
+                last_status = "error"
+
             rows.append(
                 {
                     "provider": provider_name,
@@ -260,6 +279,9 @@ def account_rows(hub: Hub) -> list[dict[str, Any]]:
                     "api_key_env": account.api_key_env,
                     "key_present": (not account.api_key_env) or bool(os.environ.get(account.api_key_env)),
                     "models": [model.id for model in provider.models],
+                    "last_checked_at": last_checked,
+                    "last_status": last_status,
+                    "last_error": last_err_msg if last_status == "error" else None,
                 }
             )
     return rows

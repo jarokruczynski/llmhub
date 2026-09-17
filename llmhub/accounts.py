@@ -694,6 +694,39 @@ class RegistryWriter:
             "accounts_left": len(block["accounts"]),
         }
 
+    def update_alias(
+        self,
+        alias_name: str,
+        *,
+        prefer: list[str] | None = None,
+        spread: int | None = None,
+        require: list[str] | None = None,
+    ) -> dict[str, Any]:
+        data = self.read()
+        data.setdefault("aliases", {})
+        if not isinstance(data["aliases"], dict):
+            data["aliases"] = {}
+        alias = data["aliases"].setdefault(alias_name, {})
+        if not isinstance(alias, dict):
+            alias = {}
+            data["aliases"][alias_name] = alias
+        if prefer is not None:
+            alias["prefer"] = [str(k).strip() for k in prefer if str(k).strip()]
+        if spread is not None:
+            alias["spread"] = max(1, int(spread))
+        if require is not None:
+            alias["require"] = [str(r).strip() for r in require if str(r).strip()]
+        save_raw(self.path, data)
+        log.info(
+            "updated alias %s: prefer=%s, spread=%s", alias_name, alias.get("prefer"), alias.get("spread")
+        )
+        return {
+            "alias": alias_name,
+            "prefer": alias.get("prefer", []),
+            "spread": alias.get("spread", 1),
+            "require": alias.get("require", []),
+        }
+
 
 # Field names vendors use for a model's context window, first match wins. Order follows how
 # often each shape turns up across the catalog's discover sources.

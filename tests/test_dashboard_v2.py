@@ -44,3 +44,53 @@ async def test_dashboard_v2_static_assets(client: httpx.AsyncClient) -> None:
     res_v2_static = await client.get("/v2/static/v2/v2.css")
     assert res_v2_static.status_code == 200
     assert "text/css" in res_v2_static.headers.get("content-type", "")
+
+
+async def test_update_alias_validation(client: httpx.AsyncClient) -> None:
+    # 1. Unknown model must be refused with 422
+    res_unknown = await client.put(
+        "/api/aliases/auto",
+        json={"prefer": ["nonexistent/fake-model"], "spread": 2},
+    )
+    assert res_unknown.status_code == 422
+    assert "unknown model" in res_unknown.text
+
+    # 2. Valid model from registry must be accepted and persisted
+    res_valid = await client.put(
+        "/api/aliases/auto",
+        json={"prefer": ["alpha/m1"], "spread": 3},
+    )
+    assert res_valid.status_code == 200
+    data = res_valid.json()
+    assert data["alias"] == "auto"
+    assert data["prefer"] == ["alpha/m1"]
+    assert data["spread"] == 3
+
+
+async def test_an_alias_cannot_be_emptied(client: httpx.AsyncClient) -> None:
+    before = await client.get("/api/registry")
+    assert before.status_code == 200
+
+    for payload in ({"prefer": []}, {"prefer": ["", "   "]}):
+        res = await client.put("/api/aliases/auto", json=payload)
+        assert res.status_code == 400, payload
+        assert "empty" in res.text
+
+    after = await client.put("/api/aliases/auto", json={"prefer": ["alpha/m1"]})
+    assert after.status_code == 200
+    assert after.json()["prefer"] == ["alpha/m1"]
+
+
+async def test_health_sweep_endpoint(client: httpx.AsyncClient) -> None:
+    res = await client.post("/api/health/sweep")
+    assert res.status_code == 200
+    data = res.json()
+    assert "probed_count" in data
+    assert "skipped_count" in data
+    assert "request_cost" in data
+    assert data["request_cost"] == data["probed_count"]
+
+    res_status = await client.get("/api/health/status")
+    assert res_status.status_code == 200
+    status_data = res_status.json()
+    assert status_data["last_sweep_at"] is not None
