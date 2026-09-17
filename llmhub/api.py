@@ -40,6 +40,7 @@ from .promo_identity import (
     registry_account,
 )
 from .providers_catalog import discover_spec, known_providers, template
+from .recorder import DEFAULT_MINUTES, MAX_MINUTES
 from .router import AllCandidatesFailed, Router, UpstreamError
 from .runtime import Hub
 from .scout.runner import ScoutBusy, ScoutService, next_run_at, run_row
@@ -1306,6 +1307,40 @@ async def run_health_sweep(request: Request) -> dict[str, Any]:
     """Probe every eligible account now. The schedule skips the ones traffic already proved."""
     require_token(request)
     return {**await sweep_once(hub_of(request)), **lan_warning(request)}
+
+
+class RecorderStartIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    minutes: int = Field(default=DEFAULT_MINUTES, ge=1, le=MAX_MINUTES)
+
+
+@router.post("/recorder/start")
+async def recorder_start(request: Request, payload: RecorderStartIn | None = None) -> dict[str, Any]:
+    """Arm the recorder for a window, discarding whatever the last run caught."""
+    require_token(request)
+    hub = hub_of(request)
+    minutes = payload.minutes if payload else DEFAULT_MINUTES
+    status = hub.recorder.start(minutes)
+    hub.store.add_event(kind="recorder", message=f"recording prompts for {minutes} min")
+    return status
+
+
+@router.post("/recorder/stop")
+async def recorder_stop(request: Request) -> dict[str, Any]:
+    """Stop early. What was already caught stays readable until the next start."""
+    require_token(request)
+    hub = hub_of(request)
+    status = hub.recorder.stop()
+    hub.store.add_event(kind="recorder", message="recording stopped")
+    return status
+
+
+@router.get("/recorder")
+async def recorder_dump(request: Request) -> dict[str, Any]:
+    """The only read in the console that needs the token: this one returns the text itself."""
+    require_token(request)
+    return hub_of(request).recorder.dump()
 
 
 @router.get("/baselines")

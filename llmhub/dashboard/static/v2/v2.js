@@ -296,6 +296,102 @@
     state.savingsBaseline = select.value;
   }
 
+  // --- Prompt recorder -------------------------------------------------
+  // Deliberately not polled with the rest of the console: it only runs while the tab is open
+  // and the recorder is armed, because this is the one view that pulls prompt text over HTTP.
+  let recorderTimer = null;
+
+  function recorderRow(row) {
+    const meta = [row.app, row.model, row.status, `${formatNumber(row.latency_ms)} ms`, timeAgo(row.ts)]
+      .filter(Boolean)
+      .map((bit) => escapeHtml(String(bit)))
+      .join(' · ');
+    const block = (label, text) => `
+      <div style="margin-top:0.5rem">
+        <div class="text-muted" style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.05em">${label}</div>
+        <pre style="margin:2px 0 0; padding:8px 10px; background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:6px; font-size:0.78rem; white-space:pre-wrap; word-break:break-word; max-height:16rem; overflow:auto">${escapeHtml(text || '(empty)')}</pre>
+      </div>`;
+    return `
+      <div class="section-card" style="margin-bottom:0.75rem">
+        <div style="font-size:0.78rem; font-weight:600">${meta}${row.truncated ? ' <span class="text-muted">· clipped</span>' : ''}</div>
+        ${block('Prompt', row.prompt)}
+        ${block('Answer', row.answer)}
+      </div>`;
+  }
+
+  function renderRecorder(data) {
+    const stateEl = document.getElementById('recorder-state');
+    const metaEl = document.getElementById('recorder-meta');
+    const toggle = document.getElementById('recorder-toggle');
+    const list = document.getElementById('recorder-list');
+    if (!list) return;
+
+    const on = !!data.recording;
+    if (stateEl) {
+      stateEl.textContent = on ? `recording · ${Math.ceil(data.seconds_left / 60)} min left` : 'off';
+      stateEl.style.color = on ? 'var(--status-ready)' : '';
+    }
+    if (toggle) toggle.textContent = on ? 'Stop recording' : 'Start recording';
+    if (metaEl) {
+      const bits = [`${formatNumber(data.count)} of ${formatNumber(data.max_entries)} kept`];
+      if (data.dropped) bits.push(`${formatNumber(data.dropped)} dropped`);
+      metaEl.textContent = bits.join(' · ');
+    }
+
+    const rows = data.entries || [];
+    if (!rows.length) {
+      list.innerHTML = `<div class="text-muted" style="padding:2rem; text-align:center">${
+        on ? 'Recording. Nothing has gone through the hub yet.' : 'Nothing recorded. Press start, then use an app.'
+      }</div>`;
+      return;
+    }
+    list.innerHTML = rows.map(recorderRow).join('');
+  }
+
+  async function loadRecorder() {
+    try {
+      const res = await api('api/recorder');
+      if (res.status === 401) {
+        document.getElementById('recorder-list').innerHTML =
+          '<div class="text-muted" style="padding:2rem; text-align:center">This tab needs the token. Set it in the top bar.</div>';
+        return;
+      }
+      if (!res.ok) return;
+      const data = await res.json();
+      renderRecorder(data);
+      scheduleRecorderPoll(data.recording && state.activeTab === 'recorder');
+    } catch (e) {
+      console.error('Error loading recorder:', e);
+    }
+  }
+
+  function scheduleRecorderPoll(keepGoing) {
+    if (recorderTimer) {
+      clearTimeout(recorderTimer);
+      recorderTimer = null;
+    }
+    if (keepGoing) recorderTimer = setTimeout(loadRecorder, 2000);
+  }
+
+  async function toggleRecorder() {
+    const stateEl = document.getElementById('recorder-state');
+    const on = stateEl && stateEl.textContent.startsWith('recording');
+    const minutes = parseInt(document.getElementById('recorder-minutes')?.value || '20', 10);
+    const res = on
+      ? await api('api/recorder/stop', { method: 'POST' })
+      : await api('api/recorder/start', { method: 'POST', body: { minutes } });
+    if (res.status === 401) {
+      notify('Recorder needs the token. Set it in the top bar.', 'error');
+      return;
+    }
+    if (!res.ok) {
+      notify('Recorder did not respond', 'error');
+      return;
+    }
+    notify(on ? 'Recording stopped' : `Recording for ${minutes} min`, 'success');
+    loadRecorder();
+  }
+
   async function loadStatus() {
     try {
       const res = await api('api/status');
@@ -492,6 +588,8 @@
     if (tabId === 'accounts') renderAccounts();
     if (tabId === 'promos') loadPromos();
     if (tabId === 'events') loadEvents();
+    if (tabId === 'recorder') loadRecorder();
+    if (tabId !== 'recorder') scheduleRecorderPoll(false);
   }
   window.switchTab = switchTab;
 
@@ -2176,6 +2274,8 @@
     });
 
     // Theme toggle
+    document.getElementById('recorder-toggle')?.addEventListener('click', toggleRecorder);
+
     document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
 
     // Refresh button

@@ -73,6 +73,9 @@
     <button type="button" class="nav-item" data-tab="events">
       <span>Events Log</span>
     </button>
+    <button type="button" class="nav-item" data-tab="recorder">
+      <span>Recorder</span>
+    </button>
   </nav>
 
   <!-- Main Content -->
@@ -449,6 +452,37 @@
           <button type="button" class="btn btn-sm" onclick="loadEvents()">↻ Refresh</button>
         </div>
         <div id="events-list" class="table-container"></div>
+      </div>
+    </section>
+
+    <!-- TAB 10: RECORDER -->
+    <section class="panel" data-panel="recorder">
+      <div class="section-card">
+        <div class="section-header">
+          <span class="section-title">Prompt Recorder</span>
+          <span class="text-muted" style="font-size:0.8rem" id="recorder-state">off</span>
+        </div>
+
+        <p class="text-secondary" style="font-size:0.85rem; margin:0 0 1rem">
+          What each app actually sent and what came back. Off unless you turn it on, kept in memory
+          only, cleared every time you start it, and gone when the hub restarts. Reading this tab
+          needs the token from another device, unlike the rest of the console.
+        </p>
+
+        <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem">
+          <button type="button" class="btn btn-primary" id="recorder-toggle">Start recording</button>
+          <div style="display:flex; gap:0.4rem; align-items:center">
+            <span class="text-muted" style="font-size:0.8rem">Window:</span>
+            <select class="select" id="recorder-minutes" style="font-size:0.8rem">
+              <option value="5">5 min</option>
+              <option value="20" selected>20 min</option>
+              <option value="60">60 min</option>
+            </select>
+          </div>
+          <span class="text-muted" style="font-size:0.8rem" id="recorder-meta"></span>
+        </div>
+
+        <div id="recorder-list"></div>
       </div>
     </section>
 

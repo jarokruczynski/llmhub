@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .auth import require_token
 from .config import CLI_KIND, Entry
 from .quota import estimate_request_cost
+from .recorder import note_call
 from .router import (
     ABANDONED_STATUS,
     CANCEL_BY_OWNER,
@@ -596,10 +597,13 @@ async def execute_chat(
     if not selection.candidates:
         raise NoCandidatesError("no eligible model with quota", selection.rejected, selection.constraints)
 
-    async def call(entry: Entry, attempt_no: int) -> Any:
-        return await call_model(hub, entry, body, app, attempt_no, stream=stream)
-
     call_kind = kind or ("stream" if stream else "sync")
+
+    async def call(entry: Entry, attempt_no: int) -> Any:
+        result = await call_model(hub, entry, body, app, attempt_no, stream=stream)
+        note_call(hub, entry, body, app, call_kind, result)
+        return result
+
     # a job has nobody waiting on the socket, so it walks the whole pool; a sync or stream
     # call has to answer before the client's read timeout, budget included
     budget_s = None if call_kind == "job" else float(hub.settings.run_budget_s)

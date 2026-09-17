@@ -8,6 +8,7 @@ import httpx
 from .config import Registry, Settings, load_registry
 from .envfile import source_env_dir
 from .quota import QuotaTracker
+from .recorder import Recorder
 from .router import Router
 from .store import Store
 
@@ -40,6 +41,8 @@ class Hub:
         self.jobs: Any = None
         self.scout: Any = None
         self.health: Any = None
+        # off until someone arms it from the console; holds nothing until then
+        self.recorder = Recorder()
 
     @classmethod
     def create(cls, settings: Settings, client: httpx.AsyncClient | None = None) -> Hub:

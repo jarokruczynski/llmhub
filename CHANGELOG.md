@@ -5,6 +5,18 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Prompt recorder: a console tab showing what each app sent and what came back, off unless it is
+  turned on. `POST api/recorder/start` arms it for a window (20 minutes by default, 120 maximum)
+  and clears whatever the previous run caught; it stops on its own when the window ends.
+  Deliberately in memory rather than the database - at the observed rate, storing prompt text
+  would be gigabytes a day - so it is capped at 200 entries and 4000 characters a side, and does
+  not survive a restart. `GET api/recorder` is the only read in the console that requires the
+  token, because it is the only one that returns the text itself.
+
 ## [0.5.0] - 2026-09-17
 
 ### Removed

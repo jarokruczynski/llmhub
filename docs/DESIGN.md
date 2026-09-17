@@ -1218,3 +1218,31 @@ Three rules the estimate follows, because an inflated one is worse than none:
 Nothing is fetched at runtime. Prices change and promotional rates expire, so the figure is an
 estimate against a stated date, and the page says so next to the number.
 
+## Prompt recorder - what went out and what came back, while someone is watching
+The console shows counts, windows and statuses; none of it is the text itself. When a model
+answers oddly the question is what it was actually asked, and nothing in the hub kept that: the
+usage table holds numbers, events hold a message, and only queued jobs keep a request body, for
+six hours.
+
+`llmhub/recorder.py` fills that gap on demand and on purpose does **not** use the database.
+Prompts here are other projects' payloads - transcripts, warehouse rows - and at the observed
+call rate (87k calls in a day, 23.6 KB average, 464 KB largest) storing them would be gigabytes
+a day, which is the failure this hub already had once. So the log is a bounded deque in memory:
+armed by hand, cleared on every start, capped at 200 entries and 4000 characters a side, and
+gone when the process restarts.
+
+The window is the other half of the bound. `POST api/recorder/start` arms it for a number of
+minutes (20 by default, 120 the ceiling) and `recording` goes false on its own when the window
+runs out - there is no way to leave it on by forgetting. `POST api/recorder/stop` ends it early
+and keeps what was caught, so a burst can be read after the fact.
+
+The hook is the inner `call` in `execute_chat`, which is the one place that sees the request
+body, the candidate it was sent to and the result, for HTTP, streaming and CLI backends alike.
+It is a no-op when the recorder is off and it swallows its own errors: a debugging aid that can
+break a served request is worse than no aid.
+
+**`GET api/recorder` is the one read in the whole console that requires the token.** Every other
+view is open on the LAN by design - counts and statuses are dull to a passer-by - but this one
+returns the text. Verified from a genuinely non-loopback address: the transcript and the
+recorder's own controls answer 401 while `api/status` still answers 200.
+
