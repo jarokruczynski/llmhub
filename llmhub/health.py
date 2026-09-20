@@ -27,8 +27,8 @@ log = logging.getLogger(__name__)
 
 # how long the loop may sleep in one go, so stopping stays responsive on shutdown
 SWEEP_POLL_SECONDS = 300.0
-# a backend that does not answer inside this is reported as a timeout and the sweep moves on.
-# A CLI backend may sit on a 600 s print timeout, and one of those must not stretch the run.
+# Fallback ceiling for one probe. `probe_entry` bounds itself with `Settings.probe_timeout_s`;
+# this outer bound also covers the setup around it, so one slow backend cannot stretch the run.
 PROBE_TIMEOUT_S = 60.0
 
 

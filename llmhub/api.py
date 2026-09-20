@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -1208,8 +1209,24 @@ async def probe_entry(hub: Hub, entry: Any, prompt: str = "ping") -> dict[str, A
     async def call(target: Any, attempt_no: int) -> Any:
         return await call_model(hub, target, body, TEST_APP, attempt_no)
 
+    timeout_s = float(hub.settings.probe_timeout_s)
     try:
-        result = await probe.run([entry], call, app=TEST_APP, model_request=entry.key)
+        result = await asyncio.wait_for(
+            probe.run([entry], call, app=TEST_APP, model_request=entry.key), timeout=timeout_s
+        )
+    except TimeoutError:
+        # the vendor took the connection and said nothing; without this the caller waits out the
+        # client read timeout, and a dialog waiting on it looks dead rather than slow
+        return {
+            "ok": False,
+            "status": "timeout",
+            "error_code": "probe_timeout",
+            "http_status": None,
+            "latency_ms": int(timeout_s * 1000),
+            "attempts": [],
+            "attempt_count": 1,
+            "error": f"no answer inside {int(timeout_s)}s",
+        }
     except HTTPException as exc:
         return {
             "ok": False,

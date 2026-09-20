@@ -7,6 +7,15 @@ and this project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Fixed
+
+- A verification probe is bounded by `Settings.probe_timeout_s` (60 s, env
+  `LLMHUB_PROBE_TIMEOUT_S`) and reports `timeout` instead of waiting out the client read timeout,
+  which is ten minutes. Quick add ran into exactly that against a vendor that accepts the
+  connection and never answers: the dialog looked dead and repeated clicks stacked six
+  ten-minute probes. The dialog also disables its button while it works, says what it is waiting
+  for, and no longer swallows a rejected request.
+
 ### Added
 
 - Prompt recorder: a console tab showing what each app sent and what came back, off unless it is

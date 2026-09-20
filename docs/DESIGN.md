@@ -1248,6 +1248,18 @@ calls were being turned away. A refusal is stored with the vendor's own words in
 answer (`quota 429`, `retry 4006`, and what it said), which is usually the reason the recorder
 was opened at all.
 
+### A probe is bounded, and the dialog says so
+`probe_entry` - the one call behind quick add, the per-account test button and the health sweep -
+is capped by `Settings.probe_timeout_s` (60 s, env `LLMHUB_PROBE_TIMEOUT_S`) and answers
+`status: timeout` rather than raising. Found the hard way: a vendor accepted the connection and
+said nothing, the client read timeout is ten minutes, and quick add sat on it. The dialog looked
+broken, so it was clicked again, and six ten-minute probes stacked up.
+
+The dialog now disables its button while the call is in flight, says what it is waiting for, and
+surfaces a rejected request instead of ending the handler silently. Both halves matter: the
+bound stops one dead vendor holding a request, and the busy state stops one slow call becoming
+six.
+
 **`GET api/recorder` is the one read in the whole console that requires the token.** Every other
 view is open on the LAN by design - counts and statuses are dull to a passer-by - but this one
 returns the text. Verified from a genuinely non-loopback address: the transcript and the

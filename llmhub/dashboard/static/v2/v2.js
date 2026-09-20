@@ -2489,25 +2489,40 @@
     });
 
     // Quick Add Modal Submit
-    document.getElementById('qa-submit-btn')?.addEventListener('click', async () => {
+    document.getElementById('qa-submit-btn')?.addEventListener('click', async (event) => {
+      const btn = event.currentTarget;
+      // The call ends with a live probe against the vendor, which can take a while. Without a
+      // busy state the dialog looks dead, and every further click starts another probe.
+      if (btn.disabled) return;
       const key = document.getElementById('qa-key')?.value?.trim();
       const source = document.getElementById('qa-source')?.value?.trim();
       if (!source) {
         alert('Please enter a source URL, vendor name or description.');
         return;
       }
-      notify('Testing and adding provider...', 'info');
-      const res = await api('api/accounts/quick', {
-        method: 'POST',
-        body: { api_key: key || undefined, source }
-      });
-      if (res.ok) {
-        notify('Provider account added and verified with 1-token probe!', 'success');
-        document.getElementById('modal-quick-add')?.classList.remove('open');
-        refreshAll();
-      } else {
-        const err = await res.json().catch(() => ({}));
-        alert('Failed to add: ' + (err.detail || 'Could not verify account.'));
+      const label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'Verifying with the vendor...';
+      notify('Adding the key, then probing the vendor. This can take a minute.', 'info');
+      try {
+        const res = await api('api/accounts/quick', {
+          method: 'POST',
+          body: { api_key: key || undefined, source }
+        });
+        if (res.ok) {
+          notify('Provider account added and verified with 1-token probe!', 'success');
+          document.getElementById('modal-quick-add')?.classList.remove('open');
+          refreshAll();
+        } else {
+          const err = await res.json().catch(() => ({}));
+          alert('Failed to add: ' + (err.detail || `Could not verify account (HTTP ${res.status}).`));
+        }
+      } catch (e) {
+        // a rejected fetch used to end the handler silently, leaving the dialog open and mute
+        alert('Failed to add: ' + (e && e.message ? e.message : e));
+      } finally {
+        btn.disabled = false;
+        btn.textContent = label;
       }
     });
 

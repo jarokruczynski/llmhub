@@ -405,6 +405,10 @@ class Settings:
     # hours between health sweeps, and the same window real traffic counts for: an account
     # served inside it is proven already and is not probed. 0 turns the schedule off.
     health_sweep_every_h: int = 6
+    # ceiling on one verification probe. A vendor that accepts the connection and never answers
+    # would otherwise hold the request for the client's whole read timeout, which is ten minutes:
+    # the quick-add dialog then looks broken while the backend is still politely waiting.
+    probe_timeout_s: int = 60
     # the scout talks to the hub through its own OpenAI wire, so it goes through the same
     # routing, quota accounting and free-only policy as any other client
     hub_base_url: str = "http://127.0.0.1:8800/v1"
@@ -446,6 +450,7 @@ class Settings:
             run_budget_s=_positive_int(env, "LLMHUB_RUN_BUDGET_S", 90),
             max_attempts=_positive_int(env, "LLMHUB_MAX_ATTEMPTS", 16),
             health_sweep_every_h=_non_negative_int(env, "LLMHUB_HEALTH_SWEEP_EVERY_H", 6),
+            probe_timeout_s=_positive_int(env, "LLMHUB_PROBE_TIMEOUT_S", 60),
             hub_base_url=env.get("LLMHUB_BASE_URL", "http://127.0.0.1:8800/v1").rstrip("/"),
             scout_at=scout_at or None,
             scout_sources_path=Path(scout_sources) if scout_sources else None,
