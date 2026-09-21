@@ -1,11 +1,11 @@
 ---
 name: llmhub-client
-description: Use when a script or app on this Mac needs to call an LLM/VLM and should go through the local free-only llmhub gateway instead of a direct vendor SDK. Triggers on "hub", "llmhub", "wyslij do huba", "darmowy model", "free LLM", "batch LLM job", or any code that would otherwise call OpenAI/Anthropic/etc directly for a task that can run on a free endpoint.
+description: Use when a script or app on this machine needs to call an LLM/VLM and should go through the local free-only llmhub gateway instead of a direct vendor SDK. Triggers on "hub", "llmhub", "wyslij do huba", "darmowy model", "free LLM", "batch LLM job", or any code that would otherwise call OpenAI/Anthropic/etc directly for a task that can run on a free endpoint.
 ---
 
 # llmhub client
 
-When the task needs an LLM call from code on this Mac, route it through the hub instead of
+When the task needs an LLM call from code on this machine, route it through the hub instead of
 calling a vendor SDK directly.
 
 ## 0. Verify the hub is up
@@ -19,7 +19,7 @@ anything else - do not fall back to a direct vendor call silently.
 
 ## 1. What it is
 
-Base URL on this Mac: `http://127.0.0.1:8800/v1`. From the LAN: `http://mac.local/hub/v1`,
+Base URL on this machine: `http://127.0.0.1:8800/v1`. From the LAN: `http://<host>.local/hub/v1`,
 which needs `Authorization: Bearer $LLMHUB_TOKEN` (loopback needs no token, LAN always does).
 Wire format is OpenAI Chat Completions (`POST /v1/chat/completions`). Free vendor endpoints
 only - the hub itself decides which vendor/model serves the call; do not pick one yourself
@@ -180,7 +180,7 @@ overnight drain instead of flooding the queue.
 
 ## 7. Dashboard
 
-`http://llmhub.localhost/` (this Mac), `http://mac.local/hub/` (LAN). Forgive an exhausted
+`http://llmhub.localhost/` (loopback), `http://<host>.local/hub/` (LAN). Forgive an exhausted
 model, disable/enable a model, pause/resume an app - all there, same actions as
 `POST /api/models/{key}/forgive|disable|enable` and `POST /api/apps/{app}/pause|resume`.
 

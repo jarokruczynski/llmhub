@@ -64,9 +64,9 @@ has since dropped, and the live db from 09-16 on:
 | 2026-09-16 .. 09-21 | live `hub.db` | 4971 |
 | **total** | | **20926** |
 
-Per day, per app:
+Per day, per app (`app-a` is a high-volume caller, `app-b` a low-volume one):
 
-| day | ytsb | detektor |
+| day | app-a | app-b |
 | --- | --- | --- |
 | 09-12 | 105 | - |
 | 09-13 | 3137 | - |
@@ -79,8 +79,8 @@ Per day, per app:
 | 09-20 | - | 3 |
 | 09-21 | - | 5 |
 
-The `ytsb` collapse ends on 09-17, when that app was given its own hourly budget and stopped
-saturating the pool. **The defect did not end with it** - `detektor` is still losing jobs to
+The `app-a` collapse ends on 09-17, when that app was given its own hourly budget and stopped
+saturating the pool. **The defect did not end with it** - `app-b` is still losing jobs to
 it, most recently 2026-09-21T06:50, on two 503s from a pinned model.
 
 **It predates 09-14.** The live db's 7-day retention starts there, which is why the first
@@ -143,7 +143,7 @@ All of the worst spinners have `next_window_at` set and `next_attempt_at` empty,
 predicted fingerprint.
 
 **The two defects compound.** Each re-attempt is another chance to draw a `retry` from the
-pool, and one draw is enough to trigger defect 1. The `detektor` job that died on 09-21T06:50
+pool, and one draw is enough to trigger defect 1. The `app-b` job that died on 09-21T06:50
 was on attempt 34 after 103 seconds: it had parked cleanly 33 times, then hit a 503 and was
 failed. Without the spin it would have had two or three chances to be unlucky instead of
 thousands.

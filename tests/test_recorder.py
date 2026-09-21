@@ -13,7 +13,7 @@ ANSWER = {"choices": [{"message": {"role": "assistant", "content": "ok"}}]}
 
 def note(rec: Recorder, content: str = "say ok", answer: str = "ok", now: datetime | None = None) -> None:
     rec.note(
-        app="ytsb",
+        app="app-a",
         model_request="auto",
         entry_key="alpha/m1",
         account="alpha-1",
@@ -159,7 +159,7 @@ def test_a_refused_attempt_is_recorded_not_dropped() -> None:
     hub.recorder = Recorder()
     hub.recorder.start(20)
 
-    note_failure(hub, FakeEntry(), BODY, "ytsb", "sync", FakeUpstream())
+    note_failure(hub, FakeEntry(), BODY, "app-a", "sync", FakeUpstream())
 
     entry = hub.recorder.dump()["entries"][0]
     assert entry["status"] == "quota 429"
@@ -181,6 +181,6 @@ def test_a_refusal_is_ignored_while_the_recorder_is_off() -> None:
     hub = FakeHub()
     hub.recorder = Recorder()
 
-    note_failure(hub, FakeEntry(), BODY, "ytsb", "sync", FakeUpstream())
+    note_failure(hub, FakeEntry(), BODY, "app-a", "sync", FakeUpstream())
 
     assert hub.recorder.dump()["entries"] == []
