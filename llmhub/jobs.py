@@ -39,6 +39,14 @@ EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 RETRY_BACKOFF_S: tuple[int, ...] = (60, 300, 900, 1800)
 # how many lost leases a job survives before it is failed instead of requeued again
 LEASE_MAX_ATTEMPTS = 3
+# What a candidate's refusal says about the job. These four say nothing about it: the vendor
+# is pacing this second, its own upstream is down, its window is spent, or the run ran out of
+# wall clock before it reached the rest of the pool. A pool that answers only these has not
+# judged the request, so the job parks and is retried; its deadline is what ends it, and it
+# leaves as `expired` with a reason rather than as `failed`. Every other status is a fact
+# waiting cannot change - too large for every candidate, a parameter none of them accepts, a
+# route none of them has, a key that will not authenticate - and those still fail at once.
+TRANSIENT_ATTEMPT_STATUSES: frozenset[str] = frozenset({"quota", "retry", "unavailable", "abandoned"})
 # the deadline/lease sweep is a per-minute job, the purge a per-ten-minutes one; neither
 # belongs in every two-second poll
 MAINTAIN_INTERVAL_S = 60.0
@@ -580,7 +588,7 @@ class JobQueue:
             )
         except (NoCandidatesError, AllCandidatesFailed) as exc:
             if isinstance(exc, AllCandidatesFailed) and not all(
-                attempt["status"] == "quota" for attempt in exc.attempts
+                attempt.get("status") in TRANSIENT_ATTEMPT_STATUSES for attempt in exc.attempts
             ):
                 return self._fail(job_id, f"upstream failure: {exc.attempts}")
             next_window = self.hub.router.next_window_at(model_request)

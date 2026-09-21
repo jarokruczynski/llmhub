@@ -215,6 +215,10 @@ candidate may not share the same restriction. A 400 that names no parameter (e.g
   `next_window_at`; the `error` column then holds a JSON note `{state, next_window_at,
   next_attempt_at, remaining_out, remaining_in}` so the dashboard can show how much room is
   left). Never fails a job for lack of quota - but it does expire one at its deadline.
+  The same park covers any pool-wide refusal that says nothing about the request: every
+  candidate answering `quota`, `retry`, `unavailable` or `abandoned` parks the job. A status
+  outside that set - `too_large`, `unsupported_param`, `not_found`, `auth`, `error` - is a
+  fact waiting cannot change, so one of those in the attempt list still fails the job at once.
 - Pause/resume per app: `POST /api/apps/{app}/pause|resume`.
 
 ## Agent lane (phase 2, design only now)

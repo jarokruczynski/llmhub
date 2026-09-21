@@ -142,6 +142,35 @@ async def test_job_failure_is_terminal(client: httpx.AsyncClient, hub: Hub) -> N
     assert "invalid_request" in (job["error"] or "") or "bad" in (job["error"] or "")
 
 
+async def test_pool_wide_transient_refusal_parks_instead_of_failing(
+    client: httpx.AsyncClient, hub: Hub
+) -> None:
+    # every candidate answered 503: the pool said nothing about the request, so the job is
+    # parked and retried. Failing it here is what turned a minute of vendor trouble into a
+    # dead job, and the contract promises the opposite.
+    job_id = (await client.post("/jobs", json=dict(JOB_BODY, model="alpha/m1"))).json()["id"]
+    with respx.mock:
+        respx.post(ALPHA_URL).mock(
+            return_value=httpx.Response(503, json={"error": {"message": "overloaded"}})
+        )
+        await hub.jobs.run_once()
+    assert (await client.get(f"/jobs/{job_id}")).json()["state"] == "waiting_quota"
+
+
+async def test_pool_wide_auth_refusal_still_fails(client: httpx.AsyncClient, hub: Hub) -> None:
+    # a key that will not authenticate is not a minute of trouble: no amount of waiting
+    # changes it, so the job still fails at once rather than parking until its deadline
+    job_id = (await client.post("/jobs", json=dict(JOB_BODY, model="alpha/m1"))).json()["id"]
+    with respx.mock:
+        respx.post(ALPHA_URL).mock(
+            return_value=httpx.Response(
+                401, json={"error": {"message": "invalid api key", "code": "invalid_api_key"}}
+            )
+        )
+        await hub.jobs.run_once()
+    assert (await client.get(f"/jobs/{job_id}")).json()["state"] == "failed"
+
+
 async def test_orphaned_running_job_is_requeued_on_start(client: httpx.AsyncClient, hub: Hub) -> None:
     job_id = (await client.post("/jobs", json=JOB_BODY)).json()["id"]
     hub.store.update_job(job_id, state="running")
