@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import respx
 
+from llmhub.jobs import park_at
 from llmhub.runtime import Hub
+from llmhub.store import now_iso, to_iso
 
 ALPHA_URL = "https://alpha.test/v1/chat/completions"
 CALLBACK_URL = "https://callback.test/done"
@@ -155,6 +158,50 @@ async def test_pool_wide_transient_refusal_parks_instead_of_failing(
         )
         await hub.jobs.run_once()
     assert (await client.get(f"/jobs/{job_id}")).json()["state"] == "waiting_quota"
+
+
+async def test_parked_job_sleeps_instead_of_spinning(client: httpx.AsyncClient, hub: Hub) -> None:
+    # a park with a window but no backoff was claimable on the very next poll, so one job
+    # could burn ten thousand attempts inside its six-hour life. Every park carries a clock.
+    job_id = (await client.post("/jobs", json=JOB_BODY)).json()["id"]
+    for entry in hub.registry.entries():
+        if entry.model.is_free:
+            hub.quota.mark_exhausted(entry, "insufficient_quota")
+    await hub.jobs.run_once()
+
+    parked = hub.store.job(job_id)
+    assert parked["state"] == "waiting_quota"
+    assert parked["next_attempt_at"]
+    assert parked["next_attempt_at"] > now_iso()
+    assert not hub.store.claimable_jobs(now_iso())
+    # a second pass changes nothing: the job is asleep, not re-attempted
+    await hub.jobs.run_once()
+    assert hub.store.job(job_id)["attempts"] == parked["attempts"]
+
+
+async def test_forgive_wakes_a_parked_job(client: httpx.AsyncClient, hub: Hub) -> None:
+    # the backoff is a guess about the pool; forgiving a model says the guess is wrong, so
+    # the parked job has to be reconsidered on the next poll rather than sleeping it out
+    job_id = (await client.post("/jobs", json=JOB_BODY)).json()["id"]
+    for entry in hub.registry.entries():
+        if entry.model.is_free:
+            hub.quota.mark_exhausted(entry, "insufficient_quota")
+    await hub.jobs.run_once()
+    assert hub.store.job(job_id)["next_attempt_at"]
+
+    forgiven = await client.post("/api/models/alpha/m1/forgive")
+    assert forgiven.json()["woken"] == 1
+    assert hub.store.job(job_id)["next_attempt_at"] is None
+
+
+async def test_park_at_takes_the_window_when_it_opens_first() -> None:
+    now = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
+    # the backoff is 60s on the first attempt; a window 10s out beats it, one an hour out does not
+    assert park_at(now, 1, to_iso(now + timedelta(seconds=10))) == now + timedelta(seconds=10)
+    assert park_at(now, 1, to_iso(now + timedelta(hours=1))) == now + timedelta(seconds=60)
+    # a window already past does not put the clock behind us, and a missing one is just the backoff
+    assert park_at(now, 1, to_iso(now - timedelta(hours=1))) == now
+    assert park_at(now, 1, None) == now + timedelta(seconds=60)
 
 
 async def test_pool_wide_auth_refusal_still_fails(client: httpx.AsyncClient, hub: Hub) -> None:

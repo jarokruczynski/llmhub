@@ -145,6 +145,26 @@ def backoff_at(now: datetime, attempts: int) -> datetime:
     return now + timedelta(seconds=RETRY_BACKOFF_S[index])
 
 
+def park_at(now: datetime, attempts: int, next_window: str | None) -> datetime:
+    """When a parked job should be looked at again.
+
+    The backoff, unless the pool declares a window that opens sooner. `next_window_at` is
+    what the client is told to wait for, but the dispatcher reads `next_attempt_at` alone, so
+    a park that leaves it empty is re-tried on every poll - once every couple of seconds, for
+    the whole life of the job. The window only ever pulls the clock earlier: a window can
+    free ahead of its schedule when another account resets or a key is added, and the backoff
+    is what notices that without asking the vendor a thousand times an hour.
+    """
+    when = backoff_at(now, attempts)
+    if not next_window:
+        return when
+    try:
+        window = parse_iso(next_window)
+    except ValueError:
+        return when
+    return max(min(window, when), now)
+
+
 class JobQueue:
     def __init__(
         self,
@@ -595,10 +615,11 @@ class JobQueue:
             rejected = exc.rejected if isinstance(exc, NoCandidatesError) else []
             room = quota_room(rejected)
             attempts = int(job.get("attempts") or 0) + 1
-            # no window data means no reset will ever be reported: back off on a clock of our
-            # own instead of waiting for an event that never comes
+            # every park gets a clock, because the dispatcher only reads this one. A model
+            # with no window data never reports a reset, so it waits on the backoff alone;
+            # one that does gets whichever comes first.
             blind = not next_window or pool_is_windowless(self.hub, model_request)
-            next_attempt = to_iso(backoff_at(utcnow(), attempts)) if blind else None
+            next_attempt = to_iso(park_at(utcnow(), attempts, None if blind else next_window))
             store.update_job(
                 job_id,
                 state="waiting_quota",

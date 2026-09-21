@@ -751,10 +751,16 @@ holds the task. A `running` row whose lease has passed with no live task behind 
 to `queued` with `lease_attempts + 1`, and fails with `error.code = "lease_lost"` on the
 third loss. Restart still requeues orphans outright: a new process holds no lease on them.
 
-**Backoff for windowless models.** A model that declares no window and has none observed
-never reports a reset, so parking the job on `next_window_at` waits for an event that is not
-coming. Such a job gets `next_attempt_at = now + 1, 5, 15, 30 min, then 30 min`, and
-`claimable_jobs` skips it until then. It still expires at its ttl.
+**Backoff on every park.** `claimable_jobs` reads `next_attempt_at` and nothing else, so a
+park that leaves it empty is re-claimed on the very next poll - once every two seconds, for
+the whole life of the job. Every park therefore carries a clock: `next_attempt_at = now + 1,
+5, 15, 30 min, then 30 min`, pulled earlier when the pool declares a `next_window_at` that
+opens before it. The window is a floor, never a ceiling: it can free ahead of schedule when
+another account resets or a key is added, and the backoff is what notices. A model that
+declares no window and has none observed never reports a reset at all, so it waits on the
+backoff alone. Parked jobs still expire at their ttl, and `POST /api/models/{key}/forgive`
+clears the clock on all of them (`woken` in its response) because that click says the guess
+the backoff is built on no longer holds.
 
 **Queue cap and retention.** More than `LLMHUB_QUEUE_MAX_PER_APP` (default 200) live jobs for
 one app answers 429 `queue_full` with `Retry-After`, per app so one dead client cannot fill

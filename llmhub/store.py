@@ -1275,6 +1275,18 @@ class Store:
         sets = ", ".join(f"{name} = ?" for name in fields)
         self.execute(f"UPDATE jobs SET {sets} WHERE id = ?", (*fields.values(), job_id))
 
+    def wake_parked_jobs(self) -> int:
+        """Drop the backoff clock on every parked job so the next poll reconsiders them.
+
+        What a parked job is waiting for is a guess about the pool, and forgiving a model
+        says that guess is now wrong. Clearing `next_attempt_at` is the only way to say so:
+        the dispatcher reads nothing else.
+        """
+        return self.execute(
+            "UPDATE jobs SET next_attempt_at = NULL, updated_at = ? WHERE state = 'waiting_quota'",
+            (now_iso(),),
+        ).rowcount
+
     def delete_job(self, job_id: str) -> bool:
         return self.execute("DELETE FROM jobs WHERE id = ?", (job_id,)).rowcount > 0
 

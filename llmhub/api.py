@@ -381,8 +381,11 @@ async def forgive_model(request: Request, key: str) -> dict[str, Any]:
     # owner clicking this says the model works again, whatever the hub last measured
     cleared = hub.quota.forgive(key) + hub.router.clear_unavailable(key)
     hub.router.clear_cooldown(key)
+    # a parked job sleeps on a backoff the dispatcher reads instead of the window; the same
+    # click that says the model works again has to cut that sleep short
+    woken = hub.store.wake_parked_jobs()
     hub.store.add_event(kind="forgive", message=f"forgive {key} ({cleared} markers)", model=key)
-    return {"key": key, "cleared": cleared, "ts": now_iso()}
+    return {"key": key, "cleared": cleared, "woken": woken, "ts": now_iso()}
 
 
 # forgive lifts the exhaustion marker but keeps what the vendor was measured at; this drops
