@@ -503,6 +503,7 @@ Environment variables:
 | `LLMHUB_JOB_LEASE_MARGIN_S` | lease = request timeout + this | `60` |
 | `LLMHUB_QUEUE_MAX_PER_APP` | live jobs one app may hold before 429 `queue_full` | `200` |
 | `LLMHUB_JOB_RETENTION_DAYS` | how long finished job rows are kept | `7` |
+| `LLMHUB_PROBE_TIMEOUT_S` | per-probe deadline when a model is being tried | `60` |
 | `LLMHUB_SCOUT_AT` | daily scout run, local `HH:MM`, empty = off | `08:00` |
 | `LLMHUB_SCOUT_SOURCES` | path to `scout_sources.yaml` | `$LLMHUB_HOME/scout_sources.yaml` |
 | `LLMHUB_BASE_URL` | hub endpoint the scout calls for its own LLM work | `http://127.0.0.1:8800/v1` |

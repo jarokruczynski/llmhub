@@ -5,6 +5,9 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project uses [Semantic Versioning](https://semver.org/).
 
+The published history starts at 0.4.0. Entries for 0.1.0 through 0.3.0 are kept
+for the record but have no tags: those commits are not part of this repository.
+
 ## [Unreleased]
 
 ### Fixed
