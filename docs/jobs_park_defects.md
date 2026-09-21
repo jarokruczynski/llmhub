@@ -2,7 +2,13 @@
 
 Found 2026-09-21 by triaging `jobs` history in `~/.llmhub/hub.db`. Both are in
 `JobWorker.process`. Line numbers are against `c26546e`, the last commit before the fixes.
-Fixed on branch `fix/jobs-transient-park-and-backoff` in two independent commits.
+Fixed in three commits, each green on its own: the transient park, the backoff, and the `auth`
+widening with the dead-key reporting that pays for it.
+
+The pre-09-14 figures below come from a snapshot of `hub.db` taken 2026-09-16, **since
+deleted** - it held 09-12 to 09-16, which the live db's 7-day retention has long dropped. The
+numbers were read out of it before it went; the file is gone and there is nothing to go
+looking for.
 
 ## Defect 1 - a transient pool-wide refusal failed the job permanently
 
@@ -54,7 +60,7 @@ has since dropped, and the live db from 09-16 on:
 
 | period | source | kills |
 | --- | --- | --- |
-| 2026-09-12 .. 09-15 | `hub.db.pre-retention-2026-09-16` | 15955 |
+| 2026-09-12 .. 09-15 | snapshot of 2026-09-16, since deleted | 15955 |
 | 2026-09-16 .. 09-21 | live `hub.db` | 4971 |
 | **total** | | **20926** |
 
@@ -78,19 +84,22 @@ saturating the pool. **The defect did not end with it** - `detektor` is still lo
 it, most recently 2026-09-21T06:50, on two 503s from a pinned model.
 
 **It predates 09-14.** The live db's 7-day retention starts there, which is why the first
-triage saw a burst beginning on 09-14. The snapshots answer it: 3242 kills on 09-12 and 09-13
-with the same signature. The snapshot's own oldest job row is 2026-09-12T10:16 because the
-job purge had already run, so the true origin is older than any surviving data. Nothing in
+triage saw a burst beginning on 09-14. The 09-16 snapshot answered it before it was deleted:
+3242 kills on 09-12 and 09-13 with the same signature. That snapshot's own oldest job row was
+2026-09-12T10:16, because the job purge had already run against it, so the true origin is
+older than any data that ever survived. Nothing in
 the history suggests the defect was ever absent; it became visible when a high-volume app
 started using the queue.
 
 **What the attempt lists contained**, classified by the set of statuses in the blob:
 
-| | kills | share |
-| --- | --- | --- |
-| transient only (`quota`/`retry`/`unavailable`/`abandoned`) | 14128 | 67.5% |
-| transient + `auth` | 3049 | 14.6% |
-| at least one hard status (`too_large`, `unsupported_param`, `not_found`, `error`) | 3749 | 17.9% |
+| | kills | share | after the fix |
+| --- | --- | --- | --- |
+| transient only (`quota`/`retry`/`unavailable`/`abandoned`) | 14128 | 67.5% | parks |
+| transient + `auth` | 3049 | 14.6% | parks (commit 3) |
+| at least one hard status (`too_large`, `unsupported_param`, `not_found`, `error`) | 3749 | 17.9% | still fails |
+
+So 17177 of the 20926, 82%, were jobs the queue should have retried and did not.
 
 Caveat: `_fail` truncates `error` at 1000 characters (`jobs.py:639`), which holds roughly the
 first seven attempts of a pool walk. A later attempt with a hard status is invisible, so the
@@ -158,14 +167,10 @@ What it deliberately does **not** change:
 - A job is still bounded. A parked job expires at its ttl (6 h by default, `deadline_of`) and
   leaves as `expired` with a reason, which is the state the design already defines for "never
   got a slot". Nothing spins past its deadline.
-- `too_large`, `unsupported_param`, `not_found`, `auth` and `error` still fail immediately.
-  These are facts waiting cannot change, and a job that is genuinely malformed must not sit in
-  the queue for six hours pretending otherwise.
-- In particular `auth` still fails, which is the conservative half of the call. A dead key on
-  one candidate while the rest of the pool answers `retry` is arguably a fact about that pair
-  rather than about the job, and parking those too would recover a further 3049 kills. That is
-  a judgement about how loudly a broken key should announce itself, not a bug, so it is left
-  alone here. Owner's call.
+- `too_large`, `unsupported_param`, `not_found` and `error` still fail immediately. These are
+  facts waiting cannot change, and a job that is genuinely malformed must not sit in the queue
+  for six hours pretending otherwise.
+- `auth` still failed after this commit; commit 3 is what changed that.
 - `vendor_errors.py` is not touched. Classifying a per-minute 429 as `retry` is correct; the
   defect was in what the job worker concluded from it.
 
@@ -187,15 +192,48 @@ Because a parked job now genuinely sleeps, `POST /api/models/{key}/forgive` clea
 saying "this model works again" would have been made to wait out a backoff - a behaviour
 change this fix would otherwise have introduced silently.
 
+**Commit 3 - `jobs: one dead key does not fail a job the rest of the pool was only pacing`.**
+
+Widens the park to tolerate `auth` - but only in company. `parks_the_job(attempts)` now
+requires that every status be one the hub can wait out *and* that at least one of them be
+genuinely transient:
+
+```python
+statuses <= TRANSIENT_ATTEMPT_STATUSES | TOLERATED_WITH_TRANSIENT
+and statuses & TRANSIENT_ATTEMPT_STATUSES
+```
+
+So `retry + auth` parks and bare `auth` still fails. That line matters: a pool whose only
+answer was "this key is not accepted" has no working key for the request, and a retry in
+thirty minutes meets the same wall. Parking it would be the same defect in a new place.
+Recovers the 3049 kills counted above as the `auth` tier.
+
+**Keeping a dead key loud.** Before this, a broken key announced itself by killing jobs. That
+was terrible as a notification and is now gone, so the signal moves to the pair: an `auth`
+refusal marks the pair unavailable for `LLMHUB_UNAVAILABLE_TTL_S` (600 s, `router.py`, in the
+same place `not_found` and `unavailable` already do it) and writes an `unavailable` event with
+the vendor's own code and message. Three reasons that is the right place rather than a new
+mechanism: the pair drops out of the pool so it stops being tried, `api/status` already reports
+unavailable pairs, and `unavailable` is not in `NOISY_EVENT_KINDS`, so the row purge keeps it
+while the `fallback` event `give_up` writes is swept away. `forgive` already clears it, and the
+600 s ttl means a key that was only briefly unprovisioned heals itself.
+
+The cooldown `give_up` sets for `auth` is deliberately left in place on top of the new parking:
+`tests/test_cli_backend.py` asserts a copilot auth failure puts the model in cooldown, and the
+copilot login hint keys off it. Swapping one parking mechanism for the other would have been
+the tidier diff and a silent regression.
+
 **Tests.** `.venv/bin/python -m pytest -q`: 621 on `main`, 623 after commit 1, 626 after
-commit 2. Five new tests in `tests/test_jobs.py` cover the transient park, the `auth` fail, the
-parked job not being re-claimed, `forgive` waking it, and `park_at`'s window/backoff choice.
-Both commits are green on their own, so either can be taken without the other.
+commit 2, 628 after commit 3. Eight new tests in `tests/test_jobs.py` cover the transient park,
+the `auth`-alone failure, the parked job not being re-claimed, `forgive` waking it, `park_at`'s
+window/backoff choice, the `parks_the_job` truth table, and a dead key still being parked and
+reported while the job survives. Each commit is green on its own.
 
 ## Not determined
 
 - How many of the 20926 killed jobs would have succeeded on a retry. The request bodies are
   retained but were never re-run, and the vendor state of those minutes is gone.
-- Whether the defect existed before 2026-09-12. No job rows survive that far back in any
-  snapshot; the retention purge had already removed them when the snapshots were taken.
+- Whether the defect existed before 2026-09-12. No job rows went back that far even in the
+  09-16 snapshot; the retention purge had already removed them when it was taken, and the
+  snapshot itself has since been deleted.
 - The exact tier-1 share, for the truncation reason above. 14128 is an upper bound.

@@ -217,8 +217,14 @@ candidate may not share the same restriction. A 400 that names no parameter (e.g
   left). Never fails a job for lack of quota - but it does expire one at its deadline.
   The same park covers any pool-wide refusal that says nothing about the request: every
   candidate answering `quota`, `retry`, `unavailable` or `abandoned` parks the job. A status
-  outside that set - `too_large`, `unsupported_param`, `not_found`, `auth`, `error` - is a
-  fact waiting cannot change, so one of those in the attempt list still fails the job at once.
+  outside that set - `too_large`, `unsupported_param`, `not_found`, `error` - is a fact
+  waiting cannot change, so one of those in the attempt list still fails the job at once.
+  `auth` is the exception on both counts: it is tolerated alongside a transient status, so
+  one dead account cannot take down a job whose other candidates were only pacing, but it
+  never parks a job on its own - a pool where authentication was the only thing that happened
+  has no working key for the request. A pair that answers `auth` is marked unavailable for
+  `LLMHUB_UNAVAILABLE_TTL_S` and writes an `unavailable` event, which is what keeps a dead key
+  visible now that it no longer announces itself by killing jobs.
 - Pause/resume per app: `POST /api/apps/{app}/pause|resume`.
 
 ## Agent lane (phase 2, design only now)

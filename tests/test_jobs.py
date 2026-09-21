@@ -6,11 +6,15 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import respx
 
-from llmhub.jobs import park_at
+from llmhub.jobs import park_at, parks_the_job, utcnow
 from llmhub.runtime import Hub
 from llmhub.store import now_iso, to_iso
 
+from .conftest import entry_of
+
 ALPHA_URL = "https://alpha.test/v1/chat/completions"
+BETA_URL = "https://beta.test/v1/chat/completions"
+GAMMA_URL = "https://gamma.test/v1/chat/completions"
 CALLBACK_URL = "https://callback.test/done"
 
 OK_PAYLOAD = {
@@ -205,8 +209,8 @@ async def test_park_at_takes_the_window_when_it_opens_first() -> None:
 
 
 async def test_pool_wide_auth_refusal_still_fails(client: httpx.AsyncClient, hub: Hub) -> None:
-    # a key that will not authenticate is not a minute of trouble: no amount of waiting
-    # changes it, so the job still fails at once rather than parking until its deadline
+    # nothing but "this key is not accepted" is not a minute of trouble: there is no working
+    # key for the request, and a retry in thirty minutes meets the same wall
     job_id = (await client.post("/jobs", json=dict(JOB_BODY, model="alpha/m1"))).json()["id"]
     with respx.mock:
         respx.post(ALPHA_URL).mock(
@@ -216,6 +220,48 @@ async def test_pool_wide_auth_refusal_still_fails(client: httpx.AsyncClient, hub
         )
         await hub.jobs.run_once()
     assert (await client.get(f"/jobs/{job_id}")).json()["state"] == "failed"
+
+
+def test_parks_the_job_draws_the_line_at_auth_alone() -> None:
+    def attempts(*statuses: str) -> list[dict[str, str]]:
+        return [{"status": status} for status in statuses]
+
+    # one dead key among candidates that were merely pacing must not take the job down
+    assert parks_the_job(attempts("retry", "auth"))
+    assert parks_the_job(attempts("auth", "quota"))
+    # but authentication on its own is not something waiting fixes
+    assert not parks_the_job(attempts("auth"))
+    assert not parks_the_job(attempts("auth", "auth"))
+    # and a hard verdict anywhere in the list still fails, auth or no auth
+    assert not parks_the_job(attempts("retry", "too_large"))
+    assert not parks_the_job(attempts("retry", "auth", "error"))
+    # the statuses that were already transient are unchanged, and an empty run still parks
+    assert parks_the_job(attempts("retry"))
+    assert parks_the_job(attempts("quota"))
+    assert parks_the_job([])
+
+
+async def test_dead_key_is_parked_and_reported_even_though_the_job_survives(
+    client: httpx.AsyncClient, hub: Hub
+) -> None:
+    # parking the job makes the dead key quiet, so the router has to make it loud: the pair
+    # leaves the pool and says why, instead of the failure being visible only as a dead job
+    job_id = (await client.post("/jobs", json=JOB_BODY)).json()["id"]
+    with respx.mock:
+        respx.post(ALPHA_URL).mock(
+            return_value=httpx.Response(
+                401, json={"error": {"message": "invalid api key", "code": "invalid_api_key"}}
+            )
+        )
+        slow_down = httpx.Response(429, json={"error": {"message": "slow down"}})
+        respx.post(BETA_URL).mock(return_value=slow_down)
+        respx.post(GAMMA_URL).mock(return_value=slow_down)
+        await hub.jobs.run_once()
+
+    assert (await client.get(f"/jobs/{job_id}")).json()["state"] == "waiting_quota"
+    assert hub.router.unavailable_until(entry_of(hub, "alpha/m1", "alpha-1"), utcnow())
+    parked = [row for row in hub.store.events(limit=200) if row["kind"] == "unavailable"]
+    assert any(row["model"] == "alpha/m1" and "auth" in row["message"] for row in parked)
 
 
 async def test_orphaned_running_job_is_requeued_on_start(client: httpx.AsyncClient, hub: Hub) -> None:

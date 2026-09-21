@@ -904,6 +904,25 @@ class Router:
                                     continue
                                 give_up(entry, failure, exc.classification.code)
                                 break
+                            if failure == "auth":
+                                # a key the vendor will not accept is a fact about the pair,
+                                # not about the request. It used to be visible because a job
+                                # full of `auth` failed; a job whose other candidates were
+                                # merely pacing now parks instead, so the pair has to carry
+                                # the signal itself. It leaves the pool for the unavailable
+                                # ttl and says why on an event kind the row purge keeps -
+                                # `fallback`, which give_up writes below, is swept up as
+                                # noise. The cooldown give_up sets is left in place: other
+                                # backends key their own auth handling off it.
+                                until = self.mark_unavailable(entry, exc.classification)
+                                self.store.add_event(
+                                    kind="unavailable",
+                                    message=f"{entry.key} ({entry.account_id}) auth "
+                                    f"{exc.classification.code}: {exc.classification.message}"[:500],
+                                    model=entry.key,
+                                    account=entry.account_id,
+                                )
+                                log.info("%s parked as auth until %s", entry.key, to_iso(until))
                             if failure == "error":
                                 if exc.classification.code == CLI_TIMEOUT_CODE:
                                     # the backend's own timeout rather than ours: the same fact

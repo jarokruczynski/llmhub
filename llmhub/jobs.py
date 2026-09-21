@@ -45,8 +45,15 @@ LEASE_MAX_ATTEMPTS = 3
 # judged the request, so the job parks and is retried; its deadline is what ends it, and it
 # leaves as `expired` with a reason rather than as `failed`. Every other status is a fact
 # waiting cannot change - too large for every candidate, a parameter none of them accepts, a
-# route none of them has, a key that will not authenticate - and those still fail at once.
+# route none of them has - and those still fail at once.
 TRANSIENT_ATTEMPT_STATUSES: frozenset[str] = frozenset({"quota", "retry", "unavailable", "abandoned"})
+# A key the vendor will not accept is not transient, but neither is it a verdict on the job:
+# one dead account among candidates that were merely pacing must not take the job down with
+# it. So `auth` is tolerated alongside a transient status - never on its own, because a pool
+# where authentication is the only thing that happened has no working key for this request
+# and no amount of waiting provisions one. The dead pair is parked and reported by the router
+# either way, so tolerating it here hides nothing.
+TOLERATED_WITH_TRANSIENT: frozenset[str] = frozenset({"auth"})
 # the deadline/lease sweep is a per-minute job, the purge a per-ten-minutes one; neither
 # belongs in every two-second poll
 MAINTAIN_INTERVAL_S = 60.0
@@ -138,6 +145,25 @@ def deadline_of(job: dict[str, Any]) -> datetime:
         return parse_iso(str(stamp))
     ttl = int(job.get("ttl_s") or 0) or 6 * 3600
     return parse_iso(str(job["created_at"])) + timedelta(seconds=ttl)
+
+
+def parks_the_job(attempts: list[dict[str, Any]]) -> bool:
+    """Whether a pool-wide refusal is a fact about this minute rather than about the job.
+
+    Every status has to be one the hub can wait out, and at least one of them has to be a
+    reason that passing time actually fixes. That second half is what keeps `auth` from
+    parking a job on its own: a pool whose only answer was "this key is not accepted" has no
+    working key for the request, and a retry in thirty minutes meets the same wall.
+
+    An empty list parks, as it always has: the run failed without reaching a candidate, so
+    nothing in it judged the request either.
+    """
+    statuses = {str(attempt.get("status")) for attempt in attempts}
+    if not statuses:
+        return True
+    if not statuses <= TRANSIENT_ATTEMPT_STATUSES | TOLERATED_WITH_TRANSIENT:
+        return False
+    return bool(statuses & TRANSIENT_ATTEMPT_STATUSES)
 
 
 def backoff_at(now: datetime, attempts: int) -> datetime:
@@ -607,9 +633,7 @@ class JobQueue:
                 job_id=str(job_id),
             )
         except (NoCandidatesError, AllCandidatesFailed) as exc:
-            if isinstance(exc, AllCandidatesFailed) and not all(
-                attempt.get("status") in TRANSIENT_ATTEMPT_STATUSES for attempt in exc.attempts
-            ):
+            if isinstance(exc, AllCandidatesFailed) and not parks_the_job(exc.attempts):
                 return self._fail(job_id, f"upstream failure: {exc.attempts}")
             next_window = self.hub.router.next_window_at(model_request)
             rejected = exc.rejected if isinstance(exc, NoCandidatesError) else []
