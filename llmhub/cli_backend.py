@@ -20,14 +20,19 @@ goes to execve directly, never through a shell.
 from __future__ import annotations
 
 import asyncio
+import base64
+import binascii
 import contextlib
 import json
 import logging
 import os
+import re
+import shlex
 import shutil
 import signal
 import time
 import uuid
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,6 +52,10 @@ JSON_OBJECT_INSTRUCTION = "Answer with one JSON object and nothing else, no pros
 JSON_SCHEMA_INSTRUCTION = "Answer with one JSON object matching this JSON Schema, nothing else:"
 ASSISTANT_CUE = "Assistant:"
 TEXT_ONLY = "cli providers take text only"
+REMOTE_IMAGE = "cli providers take images only as data: URLs; the hub never fetches a remote image"
+# what the CLIs are known to read as an image; anything else would reach the model as bytes
+IMAGE_EXTENSIONS = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg", "image/webp": "webp"}
+IMAGE_PART_TYPES = ("image_url", "input_image", "image")
 MAX_ERROR_TEXT = 2000
 DISCOVER_TIMEOUT_S = 60.0
 
@@ -81,7 +90,48 @@ class CliResult:
 # --- request -> one prompt ----------------------------------------------------------------
 
 
-def text_of(content: Any) -> str:
+# An image part becomes a line of prompt text: whatever the dialect uses to point the CLI at a
+# file the hub wrote for it. None means the CLI takes text only.
+Attach = Callable[[dict[str, Any]], str]
+
+
+def image_url_of(item: dict[str, Any]) -> str:
+    """The URL of one image part, across the OpenAI chat, Responses and Anthropic shapes."""
+    url = item.get("image_url")
+    if isinstance(url, dict):
+        url = url.get("url")
+    source = item.get("source")
+    if url is None and isinstance(source, dict):
+        if str(source.get("type")) == "base64":
+            return f"data:{source.get('media_type')};base64,{source.get('data') or ''}"
+        url = source.get("url")
+    if not isinstance(url, str) or not url.startswith("data:"):
+        raise CliRequestError(REMOTE_IMAGE)
+    return url
+
+
+def decode_data_url(url: str) -> tuple[bytes, str]:
+    """`data:image/png;base64,...` -> the bytes and the file extension the CLI will recognise."""
+    header, sep, data = url[len("data:") :].partition(",")
+    if not sep:
+        raise CliRequestError("image data: URL has no comma")
+    fields = [part.strip().lower() for part in header.split(";")]
+    mime = fields[0]
+    extension = IMAGE_EXTENSIONS.get(mime)
+    if extension is None:
+        raise CliRequestError(f"image type {mime or 'unknown'!r} is not supported; send png, jpeg or webp")
+    if "base64" not in fields[1:]:
+        raise CliRequestError("image data: URL must be base64")
+    try:
+        raw = base64.b64decode("".join(data.split()), validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise CliRequestError("image data: URL is not valid base64") from exc
+    if not raw:
+        raise CliRequestError("image data: URL is empty")
+    return raw, extension
+
+
+def text_of(content: Any, attach: Attach | None = None) -> str:
     if isinstance(content, str):
         return content
     if not isinstance(content, list):
@@ -94,15 +144,18 @@ def text_of(content: Any) -> str:
         if not isinstance(item, dict):
             continue
         kind = str(item.get("type") or "")
-        if kind in ("image_url", "input_image", "image") or "image_url" in item:
-            raise CliRequestError(TEXT_ONLY)
+        if kind in IMAGE_PART_TYPES or "image_url" in item:
+            if attach is None:
+                raise CliRequestError(TEXT_ONLY)
+            parts.append(attach(item))
+            continue
         text = item.get("text")
         if isinstance(text, str):
             parts.append(text)
     return "\n".join(parts)
 
 
-def flatten_messages(messages: Any) -> str:
+def flatten_messages(messages: Any, attach: Attach | None = None) -> str:
     """System messages first, then the turns, then a bare `Assistant:` line to answer on."""
     systems: list[str] = []
     turns: list[str] = []
@@ -110,7 +163,7 @@ def flatten_messages(messages: Any) -> str:
         if not isinstance(message, dict):
             continue
         role = str(message.get("role") or "user").lower()
-        body = text_of(message.get("content")).strip()
+        body = text_of(message.get("content"), attach).strip()
         if role in ("system", "developer"):
             if body:
                 systems.append(body)
@@ -137,14 +190,42 @@ def wants_json_object(body: dict[str, Any]) -> bool:
     return isinstance(fmt, dict) and str(fmt.get("type")) == "json_object"
 
 
-def build_prompt(body: dict[str, Any], schema: dict[str, Any] | None = None) -> str:
+def build_prompt(
+    body: dict[str, Any], schema: dict[str, Any] | None = None, attach: Attach | None = None
+) -> str:
     """The whole request as one prompt; `schema` is for a CLI that has no schema flag."""
-    prompt = flatten_messages(body.get("messages"))
+    prompt = flatten_messages(body.get("messages"), attach)
     if schema is not None:
         prompt = f"{JSON_SCHEMA_INSTRUCTION}\n{json.dumps(schema)}\n\n{prompt}"
     elif wants_json_object(body):
         prompt = f"{JSON_OBJECT_INSTRUCTION}\n\n{prompt}"
     return prompt
+
+
+class ImageFiles:
+    """The images of one request as files in the CLI's workdir, for the length of one run.
+
+    Every name is fresh (`img-<uuid>.<ext>`), so two calls sharing a workdir never see each
+    other's files and no name needs quoting. `cleanup` runs in a finally block, whatever the
+    run did: a file left behind would be readable by the next call's agent.
+    """
+
+    def __init__(self, workdir: Path, dialect: CliDialect) -> None:
+        self.workdir = workdir.resolve()
+        self.dialect = dialect
+        self.paths: list[Path] = []
+
+    def __call__(self, item: dict[str, Any]) -> str:
+        raw, extension = decode_data_url(image_url_of(item))
+        path = self.workdir / f"img-{uuid.uuid4().hex}.{extension}"
+        path.write_bytes(raw)
+        self.paths.append(path)
+        return self.dialect.image_reference(path, len(self.paths))
+
+    def cleanup(self) -> None:
+        for path in self.paths:
+            with contextlib.suppress(OSError):
+                path.unlink()
 
 
 # --- process plumbing ---------------------------------------------------------------------
@@ -472,6 +553,8 @@ class CliDialect:
     schema_in_prompt = False
     # a CLI without a `models` subcommand answers discovery out of its template instead
     lists_models = True
+    # whether image parts are written to the workdir and referenced from the prompt
+    takes_images = False
 
     def build_args(
         self,
@@ -482,6 +565,7 @@ class CliDialect:
         prompt: str,
         timeout_s: float,
         schema_path: Path | None = None,
+        images: Sequence[Path] = (),
     ) -> list[str]:
         raise NotImplementedError
 
@@ -491,15 +575,72 @@ class CliDialect:
     def succeeded(self, run: CliRun, payload: dict[str, Any]) -> bool:
         return run.returncode == 0
 
+    def image_reference(self, path: Path, number: int) -> str:
+        """The prompt text standing in for one image file."""
+        raise CliRequestError(TEXT_ONLY)
+
+    def extra_env(self, provider: ProviderDef) -> dict[str, str]:
+        """Variables this CLI needs on top of the provider block's own, given that block."""
+        return {}
+
+    def child_env(self, provider: ProviderDef) -> dict[str, str]:
+        env = cli_env(provider)
+        for name, value in self.extra_env(provider).items():
+            if name not in provider.env_deny:
+                env.setdefault(name, value)
+        return env
+
+    def login_command(self, entry: Entry) -> str:
+        """The command line that signs this provider's login in, env included.
+
+        A second licence lives under its own HOME, so the bare command would sign in the
+        wrong account; the hint has to carry the same variables the hub runs it with.
+        """
+        provider = entry.provider
+        assignments = {name: str(value) for name, value in provider.env.items()}
+        for name, value in self.extra_env(provider).items():
+            assignments.setdefault(name, value)
+        words = [
+            f"{name}={shell_word(value)}"
+            for name, value in assignments.items()
+            if name not in provider.env_deny
+        ]
+        return " ".join([*words, entry.cli_command])
+
     def auth_hint(self, entry: Entry, classification: Classification) -> str:
         command = entry.cli_command
-        return f"{entry.key}: {command} is not signed in; run `{command}` in a terminal and sign in"
+        login = self.login_command(entry)
+        return f"{entry.key}: {command} is not signed in; run `{login}` in a terminal and sign in"
+
+
+SAFE_SHELL_WORD = re.compile(r"[\w@%+=:,./~-]+")
+
+
+def shell_word(value: str) -> str:
+    """Quoted only when it has to be, so a leading `~` still expands when pasted."""
+    return value if SAFE_SHELL_WORD.fullmatch(value) else shlex.quote(value)
+
+
+# agy has no inline image input: `@file` is not expanded and a stream-json image block is
+# refused ("only text"). Its view_file tool does hand an image to the model, but only for a
+# path it may read: --add-dir makes the workdir part of the workspace, where reads are granted
+# without a prompt, and the prompt names the absolute path so the agent does not go looking.
+AGY_IMAGE_REFERENCE = (
+    "[Image {number} is the file {path} - open it with the view_file tool and look at it before answering.]"
+)
+# agy keeps its login in the OS keychain as well as in a file. Under a HOME of its own there
+# is no login keychain, and macOS answers the write with a modal "Keychain Not Found" dialog
+# that a headless run can never dismiss. An SSH session is one of the conditions under which
+# agy keeps the token in its file only, so a provider with its own HOME gets one.
+AGY_FILE_TOKEN_ENV = {"SSH_CONNECTION": "127.0.0.1 0 127.0.0.1 0"}
+SSH_ENV_NAMES = ("SSH_CONNECTION", "SSH_CLIENT", "SSH_TTY")
 
 
 class AntigravityDialect(CliDialect):
     """`agy -p ... --output-format json --sandbox`: one JSON object with a `status` field."""
 
     id = "antigravity"
+    takes_images = True
 
     def build_args(
         self,
@@ -510,6 +651,7 @@ class AntigravityDialect(CliDialect):
         prompt: str,
         timeout_s: float,
         schema_path: Path | None = None,
+        images: Sequence[Path] = (),
     ) -> list[str]:
         args = [executable, *[str(item) for item in provider.extra_args]]
         args += ["--output-format", "json", "--sandbox", "--print-timeout", print_timeout(timeout_s)]
@@ -517,8 +659,19 @@ class AntigravityDialect(CliDialect):
             args += ["--model", model.id]
         if schema_path is not None:
             args += ["--json-schema", str(schema_path)]
+        # only when there is something to read: a text call keeps the workdir out of the workspace
+        for folder in dict.fromkeys(path.parent for path in images):
+            args += ["--add-dir", str(folder)]
         args += ["-p", prompt]
         return args
+
+    def image_reference(self, path: Path, number: int) -> str:
+        return AGY_IMAGE_REFERENCE.format(number=number, path=path)
+
+    def extra_env(self, provider: ProviderDef) -> dict[str, str]:
+        if "HOME" not in provider.env or any(name in provider.env for name in SSH_ENV_NAMES):
+            return {}
+        return dict(AGY_FILE_TOKEN_ENV)
 
     def parse(self, stdout: str) -> dict[str, Any]:
         return parse_json_object(stdout)
@@ -589,6 +742,7 @@ class CopilotDialect(CliDialect):
         prompt: str,
         timeout_s: float,
         schema_path: Path | None = None,
+        images: Sequence[Path] = (),
     ) -> list[str]:
         args = [executable, "-p", prompt, "--output-format", "json"]
         if model.id:
@@ -614,7 +768,7 @@ class CopilotDialect(CliDialect):
     def auth_hint(self, entry: Entry, classification: Classification) -> str:
         if classification.rule == NOT_ENTITLED_RULE:
             return f"{entry.key}: {COPILOT_LICENCE_HINT}"
-        return f"{entry.key}: {COPILOT_LOGIN_HINT.format(command=entry.cli_command)}"
+        return f"{entry.key}: {COPILOT_LOGIN_HINT.format(command=self.login_command(entry))}"
 
 
 GEMINI_LOGIN_HINT = "run `{command}` in a terminal and pick the account the plan is on"
@@ -628,6 +782,11 @@ class GeminiDialect(CliDialect):
     id = "gemini-cli"
     schema_in_prompt = True
     lists_models = False
+    takes_images = True
+
+    def image_reference(self, path: Path, number: int) -> str:
+        # `@<path>` relative to the cwd inlines the file; png, jpeg and webp arrive as images
+        return f"@{path.name}"
 
     def build_args(
         self,
@@ -638,6 +797,7 @@ class GeminiDialect(CliDialect):
         prompt: str,
         timeout_s: float,
         schema_path: Path | None = None,
+        images: Sequence[Path] = (),
     ) -> list[str]:
         # The workdir is empty and outside any project, so there is nothing in it to trust or
         # distrust - but an untrusted folder makes the CLI override the approval mode back to
@@ -696,7 +856,7 @@ class GeminiDialect(CliDialect):
         return run.returncode == 0 and bool(payload.get("response"))
 
     def auth_hint(self, entry: Entry, classification: Classification) -> str:
-        return f"{entry.key}: {GEMINI_LOGIN_HINT.format(command=entry.cli_command)}"
+        return f"{entry.key}: {GEMINI_LOGIN_HINT.format(command=self.login_command(entry))}"
 
 
 DIALECTS: dict[str, CliDialect] = {
@@ -833,26 +993,33 @@ async def call_cli(
 ) -> CliResult:
     """One CLI run, mapped onto the result shape and usage bookkeeping of an HTTP call."""
     dialect = dialect_for(entry.template_id)
-    env = cli_env(entry.provider)
+    env = dialect.child_env(entry.provider)
     executable = resolve_command(entry.cli_command, env)
     workdir = prepare_workdir(entry.cli_workdir)
     schema = response_schema(body)
-    prompt = build_prompt(body, schema if schema is not None and dialect.schema_in_prompt else None)
+    images = ImageFiles(workdir, dialect)
     schema_path: Path | None = None
-    if schema is not None and not dialect.schema_in_prompt:
-        schema_path = workdir / f"schema-{uuid.uuid4().hex}.json"
-        schema_path.write_text(json.dumps(schema), encoding="utf-8")
-    args = dialect.build_args(
-        executable,
-        entry.provider,
-        entry.model,
-        prompt=prompt,
-        timeout_s=entry.cli_timeout_s,
-        schema_path=schema_path,
-    )
     try:
+        prompt = build_prompt(
+            body,
+            schema if schema is not None and dialect.schema_in_prompt else None,
+            images if dialect.takes_images else None,
+        )
+        if schema is not None and not dialect.schema_in_prompt:
+            schema_path = workdir / f"schema-{uuid.uuid4().hex}.json"
+            schema_path.write_text(json.dumps(schema), encoding="utf-8")
+        args = dialect.build_args(
+            executable,
+            entry.provider,
+            entry.model,
+            prompt=prompt,
+            timeout_s=entry.cli_timeout_s,
+            schema_path=schema_path,
+            images=images.paths,
+        )
         run = await run_cli(args, cwd=workdir, env=env, timeout_s=entry.cli_timeout_s)
     finally:
+        images.cleanup()
         if schema_path is not None:
             with contextlib.suppress(OSError):
                 schema_path.unlink()
@@ -957,7 +1124,7 @@ async def discover_cli_models(
         # checked before the binary is resolved: the answer is about the CLI's feature set,
         # not about whether this machine has it installed
         raise CliRequestError(f"{provider_name}: {NO_MODEL_LISTING}")
-    env = cli_env(provider)
+    env = dialect.child_env(provider)
     executable = resolve_command((provider.command or "").strip(), env)
     workdir = prepare_workdir(workdir_of(provider_name, provider))
     args = [executable, *[str(item) for item in provider.extra_args], "models"]

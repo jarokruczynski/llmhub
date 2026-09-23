@@ -38,6 +38,13 @@ ANTIGRAVITY_MODEL_NOTE = (
     "free via the signed-in agy CLI; no vision and no tools (the agent runs sandboxed in an "
     "empty directory), limits unknown"
 )
+# the Gemini ids see an image the hub writes to the workdir and the agent opens with view_file;
+# measured 2026-09-24 on 3.6-flash-low and 3.1-pro-low. The Claude and GPT ids are left text
+# only until one of them is measured the same way.
+ANTIGRAVITY_VISION_NOTE = (
+    "free via the signed-in agy CLI; images reach it as files the agent opens with view_file "
+    "(one extra agent turn per call), no tools, limits unknown"
+)
 
 COPILOT_MODEL_NOTE = (
     "a Copilot seat that is not the owner's to spend freely; the seat holder sees usage and audit logs"
@@ -967,69 +974,69 @@ PROVIDER_TEMPLATES: tuple[dict[str, Any], ...] = (
         "models": [
             {
                 "id": "gemini-3.8-flash-high",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gemini-3.8-flash-medium",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gemini-3.8-flash-low",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gemini-3.7-flash-high",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gemini-3.7-flash-medium",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gemini-3.7-flash-low",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gemini-3.6-flash-high",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gemini-3.6-flash-medium",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gemini-3.6-flash-low",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gemini-3.1-pro-high",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gemini-3.1-pro-low",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "claude-sonnet-4-6",
@@ -1082,23 +1089,25 @@ PROVIDER_TEMPLATES: tuple[dict[str, Any], ...] = (
         "Ultra), and Pro models need a paid one. Sign in by running `gemini` in a terminal and "
         "choosing Login with Google - there is no key to paste, and no model listing either, "
         "so the ids below are maintained by hand. Google may use free-tier prompts, so public "
-        "data only.",
+        "data only. Since 2026-09-24 the Google login of an individual account is refused "
+        "(IneligibleTierError UNSUPPORTED_CLIENT, 'migrate to the Antigravity suite'): a Pro "
+        "licence is reached through the antigravity template instead.",
         "models": [
             {
                 "id": "gemini-3.8-flash",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {"daily": {"requests": 1500}},
                 "notes": GEMINI_CLI_MODEL_NOTE,
             },
             {
                 "id": "gemini-flash-latest",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {"daily": {"requests": 1500}},
                 "notes": GEMINI_CLI_MODEL_NOTE,
             },
             {
                 "id": "gemini-pro-latest",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {"daily": {"requests": 1500}},
                 "notes": "Pro is a paid-plan model: a free login answers 429 for it. Otherwise "
                 + GEMINI_CLI_MODEL_NOTE,

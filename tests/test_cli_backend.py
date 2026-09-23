@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import os
 import plistlib
@@ -15,11 +16,16 @@ import yaml
 
 from llmhub.accounts import default_account_id
 from llmhub.cli_backend import (
+    AGY_FILE_TOKEN_ENV,
     COPILOT_DENY_TOOLS,
     DEFAULT_DIALECT,
+    REMOTE_IMAGE,
+    TEXT_ONLY,
     AntigravityDialect,
     CliRequestError,
     CopilotDialect,
+    GeminiDialect,
+    ImageFiles,
     build_prompt,
     dialect_for,
     flatten_messages,
@@ -48,6 +54,7 @@ if [ -n "$AGY_LOG" ]; then
   {
     echo "PID=$$"
     echo "CWD=$(pwd)"
+    echo "FILES=$(ls | tr '\\n' ' ')"
     echo "PATH=$PATH"
     echo "LEAK=${LLMHUB_TEST_SECRET:-none}"
     prev=""
@@ -155,28 +162,175 @@ def test_prompt_flattening_puts_system_first_and_ends_on_the_assistant_cue() -> 
     assert with_json.endswith("User: x\n\nAssistant:")
 
 
-async def test_image_parts_are_refused_as_text_only(cli_hub: Hub, client: httpx.AsyncClient) -> None:
-    with pytest.raises(CliRequestError):
+# a 1x1 PNG; the fake CLI never looks inside, the bytes only have to survive the round trip
+PNG_BYTES = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
+PNG_URL = "data:image/png;base64," + base64.b64encode(PNG_BYTES).decode()
+
+
+def image_body(*urls: str, model: str = MODEL) -> dict[str, Any]:
+    parts: list[dict[str, Any]] = [{"type": "text", "text": "what colour is this"}]
+    parts += [{"type": "image_url", "image_url": {"url": url}} for url in urls]
+    return {"model": model, "messages": [{"role": "user", "content": parts}]}
+
+
+def test_image_parts_without_an_attach_hook_are_text_only() -> None:
+    with pytest.raises(CliRequestError, match=TEXT_ONLY):
         flatten_messages([{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "x"}}]}])
 
+
+def test_image_files_land_in_the_workdir_and_the_prompt_points_at_them(tmp_path: Path) -> None:
+    agy = ImageFiles(tmp_path, AntigravityDialect())
+    prompt = flatten_messages(image_body(PNG_URL, PNG_URL)["messages"], agy)
+    assert len(agy.paths) == 2
+    assert len({path.name for path in agy.paths}) == 2
+    for number, path in enumerate(agy.paths, start=1):
+        assert path.parent == tmp_path.resolve()
+        assert path.name.startswith("img-") and path.suffix == ".png"
+        assert path.read_bytes() == PNG_BYTES
+        assert f"Image {number} is the file {path} - open it with the view_file tool" in prompt
+    assert prompt.startswith("User: what colour is this\n[Image 1")
+    agy.cleanup()
+    assert list(tmp_path.iterdir()) == []
+
+    gemini = ImageFiles(tmp_path, GeminiDialect())
+    prompt = flatten_messages(image_body(PNG_URL)["messages"], gemini)
+    # the CLI inlines `@<file>` relative to its cwd; on its own line it needs no escaping
+    assert prompt == f"User: what colour is this\n@{gemini.paths[0].name}\n\nAssistant:"
+    gemini.cleanup()
+
+
+def test_image_url_shapes_and_refusals(tmp_path: Path) -> None:
+    files = ImageFiles(tmp_path, AntigravityDialect())
+    b64 = PNG_URL.split(",", 1)[1]
+    files({"type": "image_url", "image_url": PNG_URL})
+    files({"type": "input_image", "image_url": PNG_URL})
+    files({"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": b64}})
+    files({"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64[:20] + "\n" + b64[20:]}})
+    assert [path.suffix for path in files.paths] == [".png", ".png", ".png", ".jpg"]
+    files.cleanup()
+
+    for url, message in (
+        ("https://example.com/a.png", REMOTE_IMAGE),
+        ("data:image/gif;base64," + b64, "not supported"),
+        ("data:image/png," + b64, "must be base64"),
+        ("data:image/png;base64,***", "not valid base64"),
+        ("data:image/png;base64,", "empty"),
+    ):
+        with pytest.raises(CliRequestError, match=re.escape(message)):
+            files({"type": "image_url", "image_url": {"url": url}})
+    assert list(tmp_path.iterdir()) == []
+
+
+async def test_an_image_reaches_agy_as_a_readable_file_and_is_removed_afterwards(
+    cli_hub: Hub, client: httpx.AsyncClient, cli_log: Path
+) -> None:
+    response = await client.post(
+        "/v1/chat/completions", json=image_body(PNG_URL), headers={"X-Hub-App": "my-app"}
+    )
+    assert response.status_code == 200
+
+    workdir = (cli_hub.settings.home / "cli-work" / "antigravity").resolve()
+    args = log_values(cli_log, "ARG")
+    assert args[args.index("--add-dir") + 1] == str(workdir)
+    assert args.index("--add-dir") < args.index("-p")
+    listed = log_values(cli_log, "FILES")[0].split()
+    assert len(listed) == 1 and listed[0].startswith("img-") and listed[0].endswith(".png")
+    assert f"Image 1 is the file {workdir / listed[0]}" in args[-1]
+    assert "--dangerously-skip-permissions" not in args
+    assert list(workdir.iterdir()) == []
+
+
+async def test_a_text_call_does_not_add_the_workdir_to_the_workspace(
+    cli_hub: Hub, client: httpx.AsyncClient, cli_log: Path
+) -> None:
+    response = await client.post("/v1/chat/completions", json=BODY, headers={"X-Hub-App": "my-app"})
+    assert response.status_code == 200
+    assert "--add-dir" not in log_values(cli_log, "ARG")
+
+
+async def test_image_files_are_removed_after_a_timeout(
+    hub: Hub, client: httpx.AsyncClient, tmp_path: Path, cli_log: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register_cli(hub, fake_cli(tmp_path), timeout_s=1)
+    monkeypatch.setenv("AGY_MODE", "slow")
+    response = await client.post(
+        "/v1/chat/completions", json=image_body(PNG_URL), headers={"X-Hub-App": "my-app"}
+    )
+    assert response.status_code == 502
+    assert log_values(cli_log, "FILES")[0].strip().startswith("img-")
+    assert list((hub.settings.home / "cli-work" / "antigravity").iterdir()) == []
+
+
+async def test_a_bad_image_is_a_400_and_leaves_no_file_behind(
+    cli_hub: Hub, client: httpx.AsyncClient, cli_log: Path
+) -> None:
+    # the first image is written before the second one fails to decode
+    for url, message in (
+        ("https://example.com/a.png", "never fetches"),
+        ("data:image/png;base64,***", "base64"),
+    ):
+        response = await client.post(
+            "/v1/chat/completions", json=image_body(PNG_URL, url), headers={"X-Hub-App": "my-app"}
+        )
+        assert response.status_code == 400
+        assert message in response.text
+    assert not cli_log.exists()
+    assert list((cli_hub.settings.home / "cli-work" / "antigravity").iterdir()) == []
+
+
+async def test_copilot_still_refuses_images_as_text_only(copilot_hub: Hub, client: httpx.AsyncClient) -> None:
     response = await client.post(
         "/v1/chat/completions",
-        json={
-            "model": MODEL,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": "what is this"},
-                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAA"}},
-                    ],
-                }
-            ],
-        },
+        json=image_body(PNG_URL, model=COPILOT_MODEL),
         headers={"X-Hub-App": "my-app"},
     )
     assert response.status_code == 400
     assert "text only" in response.text
+
+
+async def test_a_vision_model_on_a_cli_provider_is_picked_for_vision(
+    hub: Hub, client: httpx.AsyncClient, tmp_path: Path, cli_log: Path
+) -> None:
+    register_cli(
+        hub,
+        fake_cli(tmp_path),
+        models=[{"id": "gemini-3.8-flash-low", "caps": ["text", "json", "reasoning", "vision"], "free": {}}],
+    )
+    response = await client.post(
+        "/v1/chat/completions",
+        json=image_body(PNG_URL),
+        headers={"X-Hub-App": "my-app", "X-Hub-Require": "vision"},
+    )
+    assert response.status_code == 200
+    assert response.headers["x-hub-model"] == MODEL
+
+
+def test_a_second_agy_home_keeps_its_token_out_of_the_keychain(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("HOME", "/parent/home")
+    dialect = AntigravityDialect()
+    default = ProviderDef(kind="cli", command="agy")
+    second = ProviderDef(kind="cli", command="agy", env={"HOME": "~/homes/second"})
+    assert "SSH_CONNECTION" not in dialect.child_env(default)
+    env = dialect.child_env(second)
+    assert env["SSH_CONNECTION"] == AGY_FILE_TOKEN_ENV["SSH_CONNECTION"]
+    assert env["HOME"] == str(Path("~/homes/second").expanduser())
+    # a block that names its own SSH variable, or denies the one we would add, is left alone
+    own = ProviderDef(kind="cli", command="agy", env={"HOME": "/h", "SSH_TTY": "/dev/null"})
+    assert "SSH_CONNECTION" not in dialect.child_env(own)
+    denied = ProviderDef(kind="cli", command="agy", env={"HOME": "/h"}, env_deny=["SSH_CONNECTION"])
+    assert "SSH_CONNECTION" not in dialect.child_env(denied)
+
+    entry = Entry(
+        key="antigravity-2/gemini-3.6-flash-low",
+        provider_name="antigravity-2",
+        provider=second,
+        model=ModelDef(id="gemini-3.6-flash-low", free={}),
+        account=AccountDef(id="antigravity-2-main", api_key_env=None),
+    )
+    hint = dialect.auth_hint(entry, classify(None, "not signed in", "antigravity"))
+    assert "run `HOME=~/homes/second SSH_CONNECTION='127.0.0.1 0 127.0.0.1 0' agy`" in hint
 
 
 async def test_success_maps_usage_and_runs_sandboxed_in_an_empty_workdir(

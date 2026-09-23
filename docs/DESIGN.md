@@ -481,7 +481,8 @@ in the CLI's own config. Models = ids from `agy models`, caps `[text, json, reas
 
 Gateway mapping (`llmhub/cli_backend.py`): OpenAI chat request -> one prompt text: system
 messages first, then `User:`/`Assistant:` turns, final line `Assistant:`; image parts ->
-400 "cli providers take text only"; `response_format` json_schema -> temp file +
+400 "cli providers take text only" (since 2026-09-24 agy takes images, see "Images through
+the CLI providers"); `response_format` json_schema -> temp file +
 `--json-schema`; `json_object` -> a one-line instruction appended to the prompt;
 `max_tokens` ignored (no flag); `temperature` ignored. Run with asyncio subprocess, never
 `--dangerously-skip-permissions`, always `--sandbox`. Response -> `chat.completion` with
@@ -1176,6 +1177,62 @@ router treats the two as separate providers with separate daily windows and spre
 
 The one step that cannot be automated is the same as for the first licence: `HOME=<directory>
 gemini` in a terminal, then Login with Google with the second account.
+
+2026-09-24: the Gemini CLI Google login is refused for individual accounts
+(`IneligibleTierError`, reasonCode `UNSUPPORTED_CLIENT`, "migrate to the Antigravity suite").
+The `gemini-cli` and `gemini-cli-2` blocks stay registered with `models: []`; only the API-key
+path still answers, and `env_deny` keeps the key out on purpose. A Pro licence is reached
+through `agy` instead, and the two-login mechanism carries over unchanged: `HOME=<dir> agy`
+creates its own `<dir>/.gemini/antigravity-cli` and asks for its own sign-in. The second
+licence is the block `antigravity-2`: `template: antigravity`, `command: agy`,
+`env: {HOME: ~/.llmhub/gemini-homes/second}`, the same model ids as `antigravity`.
+
+agy and the keychain. agy stores its token in a file and in the OS keychain. Under a HOME of
+its own there is no `Library/Keychains/login.keychain-db`, and a keychain write makes macOS
+show a modal "Keychain Not Found" dialog. A headless run cannot dismiss it; agy gives up after
+5 s and falls back to the file, and the next token refresh (about hourly) shows it again.
+agy has its own escape: when it detects an SSH session (`SSH_CONNECTION`, `SSH_CLIENT` or
+`SSH_TTY` set) it logs "Using file-based token storage because SSH session detected" and
+never touches the keychain. So `AntigravityDialect.extra_env` adds
+`SSH_CONNECTION=127.0.0.1 0 127.0.0.1 0` to the child of any agy provider whose block sets
+`env.HOME`, unless the block sets an SSH variable itself or denies it. The default home keeps
+using the real login keychain. A dedicated keychain per HOME was the alternative and was
+rejected: `security create-keychain`, `default-keychain -s` and `login-keychain -s` write the
+user's keychain search list and defaults, which is the owner's real login keychain setup.
+The auth hint prints the whole login line with the same variables (for example
+`HOME=~/.llmhub/gemini-homes/second SSH_CONNECTION='127.0.0.1 0 127.0.0.1 0' agy`), so the
+interactive sign-in also keeps its token out of the keychain.
+
+### Images through the CLI providers (as built 2026-09-24)
+An `image_url` part (OpenAI chat shape, the Responses `input_image` shape and the Anthropic
+`source: {type: base64}` shape) is decoded from its `data:` URL and written to the provider's
+workdir as `img-<uuid>.<png|jpg|webp>`. The prompt gets a reference at the image's position,
+and every file is removed in a `finally` after the run, also on timeout, cancellation or a
+decode error in a later part. An `http(s)` URL is a 400 ("the hub never fetches a remote
+image"); gif and non-base64 data URLs are 400 too. Only dialects with `takes_images` accept
+images; Copilot keeps the 400 "cli providers take text only".
+
+- agy: `@file` is not expanded, and `--input-format stream-json` refuses an image content
+  block ("only text"). What works is the agent's `view_file` tool, which hands the image to
+  the model. It needs read permission: without a grant headless mode auto-denies
+  `read_file(<path>)`. `--add-dir <workdir>` puts the workdir in the workspace, where reads are
+  granted with no prompt and no settings.json edit. `command` is never allowed and
+  `--dangerously-skip-permissions` is never passed. The prompt names the absolute path, or the
+  agent goes looking with `find /`, which is denied. The reference is
+  `[Image N is the file <abs path> - open it with the view_file tool and look at it before
+  answering.]`, and `--add-dir` is only passed when the request has images.
+  Measured on a 64x64 green PNG with a neutral file name: gemini-3.6-flash-low "Green",
+  12.9k in / 201 out, 13.7 s; gemini-3.1-pro-low "Green", 19.3k in / 427 out, 6.7 s. The
+  extra view_file turn is part of that cost. The Claude ids could not be measured (weekly
+  Claude/GPT quota at 0% on both logins), so only the Gemini ids carry `vision`.
+- gemini: `@<name>` relative to the cwd inlines the file (png, jpeg, webp), anywhere in the
+  prompt, on its own line, several per prompt. Verified 2026-09-24 with gemini-3-flash-preview
+  on the API-key path. The template ids carry `vision`, but the login path is dead (above).
+
+Routing: a model with `vision` in `caps` enters the `vision` alias pool and matches
+`X-Hub-Require: vision` like any other. The pool is every entry, sorted with the alias
+`prefer` list first, so the agy Gemini ids join `vision` (and `auto`, which has no
+`require`) behind the preferred ones. No alias order was changed.
 
 ## Health sweep - periodic proof that an idle account still works
 Real traffic answers this for the accounts it touches: a served call writes a usage row and the
