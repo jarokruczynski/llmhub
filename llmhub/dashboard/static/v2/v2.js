@@ -816,7 +816,7 @@
     if (rec.loading) return;
     rec.loading = true;
     try {
-      const url = rec.rev === null ? 'api/recorder' : `api/recorder?since=${rec.rev}`;
+      const url = Number.isInteger(rec.rev) ? `api/recorder?since=${rec.rev}` : 'api/recorder';
       const res = await api(url);
       if (res.status === 401) {
         resetRecorderView();
@@ -829,13 +829,15 @@
         return;
       }
       if (!res.ok) {
+        // an answer the next poll cannot build on: start again from a full read
+        rec.rev = null;
         scheduleRecorderPoll(state.activeTab === 'recorder');
         return;
       }
       const data = await res.json();
       if (data.started_at !== rec.startedAt) {
         // a new run cleared the buffer; what is on screen belongs to the old one
-        const partial = rec.rev !== null;
+        const partial = Number.isInteger(rec.rev);
         resetRecorderView();
         rec.startedAt = data.started_at;
         if (partial) {
@@ -850,7 +852,7 @@
       } else if (!data.count) {
         rec.entries.clear();
       }
-      rec.rev = data.rev;
+      rec.rev = Number.isInteger(data.rev) ? data.rev : null;
       rec.status = data;
       renderRecorderHeader();
       renderRecorderView();
