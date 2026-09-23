@@ -314,7 +314,7 @@
   const REC_CLAMP_CHARS = 1400;
   const REC_CLAMP_LINES = 18;
   const REC_ACTIVE_MS = 60000;
-  const REC_OPEN = ['pending', 'streaming'];
+  const REC_OPEN = ['queued', 'pending', 'streaming'];
 
   function readStoredList(key) {
     try {
@@ -365,14 +365,22 @@
     if (ms === null || ms === undefined) return '';
     if (ms < 1000) return `${ms} ms`;
     if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
-    const m = Math.floor(ms / 60000);
-    return `${m} min ${Math.round((ms % 60000) / 1000)} s`;
+    return minutesOf(ms);
+  }
+
+  // how long something took, read at a glance: whole seconds, minutes once there are any
+  function minutesOf(ms) {
+    const total = Math.max(0, Math.round((ms || 0) / 1000));
+    const m = Math.floor(total / 60);
+    const s = total % 60;
+    return m ? `${m} min ${String(s).padStart(2, '0')} s` : `${s} s`;
   }
 
   function statusClass(status) {
     const s = String(status || '');
     if (s === 'ok') return 'ok';
     if (s === 'pending') return 'pending';
+    if (s === 'queued') return 'queued';
     if (s === 'streaming') return 'streaming';
     if (s === 'cancelled') return 'cancelled';
     return 'failed';
@@ -570,24 +578,37 @@
     return `${bits.join(' · ')} tok${tokens.estimated ? ' (estimated)' : ''}`;
   }
 
-  function answerHtml(row) {
+  function answerHtml(row, first = row) {
     const cls = statusClass(row.status);
     const who = [row.model, row.account].filter(Boolean).join(' · ');
+    const queue = row.queued_ms >= 1000 ? `queued ${minutesOf(row.queued_ms)}` : '';
+    if (cls === 'queued') {
+      return `<div class="rec-answer rec-queued">
+        <div class="rec-bubble rec-reply"><span class="rec-spinner"></span> queued, waiting for a free slot</div>
+        <div class="rec-stamp"><span class="rec-took rec-wait" data-since="${escapeHtml(row.sent_at)}" data-label="in queue">0 s</span> · asked for ${escapeHtml(row.model_request || 'auto')}</div>
+      </div>`;
+    }
     if (cls === 'pending' || cls === 'streaming') {
       const label = cls === 'pending' ? 'waiting for' : 'streaming from';
       return `<div class="rec-answer rec-${cls}">
         <div class="rec-bubble rec-reply"><span class="rec-spinner"></span> ${label} ${escapeHtml(row.model || 'the model')}</div>
-        <div class="rec-stamp"><span class="rec-wait" data-since="${escapeHtml(row.sent_at)}">0 s</span>${
-          row.first_ms != null ? ` · headers after ${secondsOf(row.first_ms)}` : ''
-        } · attempt ${row.attempt} · ${escapeHtml(who)}</div>
+        <div class="rec-stamp"><span class="rec-took rec-wait" data-since="${escapeHtml(row.started_at || row.sent_at)}" data-label="${cls === 'pending' ? 'thinking' : 'streaming'}">0 s</span>${
+          queue ? ` · ${queue}` : ''
+        }${row.first_ms != null ? ` · headers after ${secondsOf(row.first_ms)}` : ''} · attempt ${row.attempt} · ${escapeHtml(who)}</div>
       </div>`;
     }
     const reasoning = row.reasoning
       ? `<details class="rec-reasoning"><summary>reasoning · ${formatNumber(row.reasoning.length)} chars</summary>${messageBlock(`a${row.id}:r`, 'reasoning', row.reasoning)}</details>`
       : '';
+    const took = cls === 'ok' ? 'answered in' : cls === 'cancelled' || row.status === 'not sent' ? 'ended after' : 'refused after';
+    // from the moment the app sent the request, not from this attempt: queue and earlier
+    // refusals are part of how long the app waited
+    const wall = new Date(row.ts).getTime() - new Date(first.sent_at).getTime();
+    const total = Number.isFinite(wall) && wall >= 0 ? wall : (row.latency_ms || 0) + (row.queued_ms || 0);
+    const split = total - (row.latency_ms || 0) >= 1000;
     const stamp = [
       clockOf(row.ts),
-      `answered after ${secondsOf(row.latency_ms)}`,
+      split ? `${queue || (row.attempt > 1 ? `after ${row.attempt - 1} refused` : 'waiting')} + model ${minutesOf(row.latency_ms)}` : '',
       row.first_ms != null && row.kind === 'stream' ? `first byte ${secondsOf(row.first_ms)}` : '',
       cls !== 'ok' ? row.status : '',
       `attempt ${row.attempt}`,
@@ -596,7 +617,7 @@
     ].filter(Boolean);
     return `<div class="rec-answer rec-${cls}">
       <div class="rec-bubble rec-reply">${reasoning}${messageBlock(`a${row.id}:t`, cls === 'ok' ? 'assistant' : row.status, row.answer)}</div>
-      <div class="rec-stamp">${escapeHtml(stamp.join(' · '))}</div>
+      <div class="rec-stamp"><span class="rec-took">${took} ${minutesOf(total)}</span> · ${escapeHtml(stamp.filter(Boolean).join(' · '))}</div>
     </div>`;
   }
 
@@ -669,7 +690,7 @@
       const signature = answersSignature(attempts);
       if (node.dataset.sig !== signature) {
         node.dataset.sig = signature;
-        node.querySelector('.rec-answers').innerHTML = attempts.map(answerHtml).join('');
+        node.querySelector('.rec-answers').innerHTML = attempts.map((row) => answerHtml(row, attempts[0])).join('');
       }
     }
     // entries the ring pushed out
@@ -719,6 +740,7 @@
     grid.dataset.n = String(Math.min(rec.panes.size, REC_MAX_PANES));
     fitRecorderGrid();
     for (const session of shown) syncPane(rec.panes.get(session.app), session);
+    tickWaits();
     if (empty) {
       const on = rec.status && rec.status.recording;
       empty.hidden = rec.panes.size > 0;
@@ -808,7 +830,7 @@
     const now = Date.now();
     document.querySelectorAll('#recorder-grid .rec-wait').forEach((el) => {
       const since = new Date(el.dataset.since).getTime();
-      if (!isNaN(since)) el.textContent = `waiting ${secondsOf(Math.max(0, now - since)).replace(/\.\d s$/, ' s')}`;
+      if (!isNaN(since)) el.textContent = `${el.dataset.label || 'waiting'} ${minutesOf(now - since)}`;
     });
   }
 

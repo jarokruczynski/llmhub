@@ -310,3 +310,66 @@ async def test_a_streamed_answer_is_recorded_once_the_stream_ends(client: httpx.
     assert row["answer"] == "hello"
     assert row["tokens"]["out"] == 3
     assert row["first_ms"] is not None
+
+
+def test_a_request_shows_while_it_waits_for_a_slot_and_splits_the_wait() -> None:
+    from llmhub.recorder import begin_call, begin_request
+
+    class FakeHub:
+        pass
+
+    class FakeEntry:
+        key = "alpha/m1"
+        account_id = "alpha-1"
+
+    hub = FakeHub()
+    hub.recorder = Recorder()
+    hub.recorder.start(20)
+
+    queued = begin_request(hub, BODY, "app-a", "sync", request_id=7)
+    row = hub.recorder.dump()["entries"][0]
+    assert row["status"] == "queued"
+    assert row["model"] == ""
+
+    opened = begin_call(hub, FakeEntry(), BODY, "app-a", "sync", request_id=7, attempt=1, queued=queued)
+
+    assert opened is queued
+    assert hub.recorder.status()["count"] == 1
+    row = hub.recorder.dump()["entries"][0]
+    assert row["status"] == "pending"
+    assert row["model"] == "alpha/m1"
+    assert row["started_at"] >= row["sent_at"]
+
+
+def test_a_request_that_never_reached_a_vendor_says_why() -> None:
+    from llmhub.recorder import begin_request, close_request
+
+    class FakeHub:
+        pass
+
+    class NoCandidates(Exception):
+        attempts = [{"model": "alpha/m1", "status": "slot_wait", "error_code": "slot_queue_full"}]
+
+    hub = FakeHub()
+    hub.recorder = Recorder()
+    hub.recorder.start(20)
+    queued = begin_request(hub, BODY, "app-a", "sync", request_id=8)
+
+    close_request(hub, queued, NoCandidates("all candidates failed"))
+
+    row = hub.recorder.dump()["entries"][0]
+    assert row["status"] == "not sent"
+    assert "slot_queue_full" in row["answer"]
+
+
+@respx.mock
+async def test_a_request_with_no_candidate_is_recorded(client: httpx.AsyncClient, hub) -> None:
+    hub.recorder.start(5)
+
+    response = await client.post(
+        "/v1/chat/completions", json=dict(CHAT, model="no-such/model"), headers={"X-Hub-App": "app-a"}
+    )
+
+    assert response.status_code >= 400
+    rows = hub.recorder.dump()["entries"]
+    assert [row["status"] for row in rows] == ["not sent"]

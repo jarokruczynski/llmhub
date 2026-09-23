@@ -38,10 +38,12 @@ MAX_CHARS = 6000
 MAX_PROMPT_CHARS = 24000
 TRUNCATED = "\n[... truncated by the recorder ...]\n"
 
+QUEUED = "queued"
 PENDING = "pending"
 STREAMING = "streaming"
 CANCELLED = "cancelled"
-OPEN_STATUSES = (PENDING, STREAMING)
+NOT_SENT = "not sent"
+OPEN_STATUSES = (QUEUED, PENDING, STREAMING)
 
 
 def _clip(text: str, limit: int = MAX_CHARS) -> tuple[str, bool]:
@@ -186,6 +188,8 @@ class Entry:
     kind: str
     messages: list[dict[str, Any]]
     status: str = PENDING
+    started_at: str | None = None
+    queued_ms: int = 0
     ts: str | None = None
     answer: str = ""
     reasoning: str = ""
@@ -206,6 +210,8 @@ class Entry:
             "attempt": self.attempt,
             "rev": self.rev,
             "sent_at": self.sent_at,
+            "started_at": self.started_at or self.sent_at,
+            "queued_ms": self.queued_ms,
             "ts": self.ts,
             "app": self.app,
             "model_request": self.model_request,
@@ -272,9 +278,13 @@ class Recorder:
         body: dict[str, Any],
         request_id: int | None = None,
         attempt: int = 1,
+        status: str = PENDING,
         now: datetime | None = None,
     ) -> Entry | None:
-        """Open an entry as the attempt is sent. None while the recorder is off."""
+        """Open an entry as the attempt is sent, or as the request arrives (`queued`).
+
+        None while the recorder is off.
+        """
         moment = (now or datetime.now(UTC)).astimezone(UTC)
         if not self.recording(moment):
             return None
@@ -294,6 +304,7 @@ class Recorder:
             account=account,
             kind=kind,
             messages=messages,
+            status=status,
             truncated=cut,
             started=time.monotonic(),
         )
@@ -330,6 +341,20 @@ class Recorder:
             entry.first_ms = first_ms
         entry.tokens = tokens or (estimated_tokens(entry.messages, answer) if status == "ok" else None)
         entry.truncated = entry.truncated or answer_cut or reasoning_cut
+
+    def claim(self, entry: Entry, *, entry_key: str, account: str, now: datetime | None = None) -> None:
+        """A queued request got its first candidate: the wait so far is the queue, not the model."""
+        if entry.status != QUEUED:
+            return
+        moment = (now or datetime.now(UTC)).astimezone(UTC)
+        self.rev += 1
+        entry.rev = self.rev
+        entry.status = PENDING
+        entry.model = entry_key
+        entry.account = account
+        entry.queued_ms = int((time.monotonic() - entry.started) * 1000) if entry.started else 0
+        entry.started_at = to_iso(moment)
+        entry.started = time.monotonic()
 
     def streaming(self, entry: Entry, first_ms: int) -> None:
         """The headers are back and the body is on its way to the caller."""
@@ -421,6 +446,52 @@ def recorder_of(hub: Any) -> Recorder | None:
     return recorder
 
 
+def begin_request(
+    hub: Any, body: dict[str, Any], app: str, kind: str, request_id: int | None
+) -> Entry | None:
+    """Adapter for the gateway: open an entry as the request arrives, before any slot is free.
+
+    A call can stand in line for minutes behind a busy pair; without this the console shows
+    nothing until the vendor is asked, and the prompt turns up long after the app sent it.
+    """
+    recorder = recorder_of(hub)
+    if recorder is None:
+        return None
+    try:
+        return recorder.begin(
+            app=app,
+            model_request=str(body.get("model") or ""),
+            entry_key="",
+            account="",
+            kind=kind,
+            body=body,
+            request_id=request_id,
+            attempt=1,
+            status=QUEUED,
+        )
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def close_request(hub: Any, queued: Entry | None, exc: BaseException) -> None:
+    """The request ended before its first attempt was sent: say why, rather than wait forever."""
+    recorder = getattr(hub, "recorder", None)
+    if recorder is None or queued is None or queued.status != QUEUED:
+        return
+    try:
+        if isinstance(exc, asyncio.CancelledError):
+            recorder.finish(queued, status=CANCELLED, answer="cancelled while waiting for a slot")
+            return
+        attempts = getattr(exc, "attempts", None) or []
+        skipped = ", ".join(
+            f"{row.get('model')}: {row.get('error_code') or row.get('status')}" for row in attempts
+        )
+        answer = f"{type(exc).__name__}: {exc}" + (f"\n{skipped}" if skipped else "")
+        recorder.finish(queued, status=NOT_SENT, answer=answer)
+    except Exception:  # noqa: BLE001
+        return
+
+
 def begin_call(
     hub: Any,
     entry: Any,
@@ -430,12 +501,22 @@ def begin_call(
     *,
     request_id: int | None = None,
     attempt: int = 1,
+    queued: Entry | None = None,
 ) -> Entry | None:
-    """Adapter for the gateway: open an entry for one attempt. Never raises."""
+    """Adapter for the gateway: open an entry for one attempt. Never raises.
+
+    The first attempt takes over the entry `begin_request` opened, so a request reads as one
+    prompt whose wait splits into the queue and the model.
+    """
     recorder = recorder_of(hub)
     if recorder is None:
         return None
     try:
+        if queued is not None and queued.status == QUEUED:
+            recorder.claim(
+                queued, entry_key=getattr(entry, "key", ""), account=getattr(entry, "account_id", "")
+            )
+            return queued
         return recorder.begin(
             app=app,
             model_request=str(body.get("model") or ""),
@@ -557,6 +638,8 @@ __all__ = [
     "MAX_MINUTES",
     "Recorder",
     "begin_call",
+    "begin_request",
+    "close_request",
     "note_call",
     "note_failure",
     "note_stream_end",

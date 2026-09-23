@@ -1346,8 +1346,17 @@ it would read as waiting forever. Attempts of one request share a `request_id` t
 A stream's text is only buffered when its attempt is being recorded (`recorder_entry` in
 `StreamCall.extra`); a stream nobody watches costs nothing extra.
 
-Each entry carries `sent_at`, `ts` (answered), `latency_ms`, `first_ms` (headers back, for a
-stream) and `tokens` as the vendor billed them (`in`, `out`, `cached`, `reasoning`), or a
+A request is opened even earlier, as it arrives in `execute_chat` (`status: queued`, no model
+yet), and its first attempt takes that entry over once a candidate's slot is free. A call can
+stand in line for minutes behind a busy pair - a CLI backend with concurrency 1 answering in a
+minute or two - and before this the prompt appeared only when the vendor was finally asked,
+which read as the console lagging behind. The entry keeps `queued_ms`, so the console can say
+"queued 40 s + model 3 s". A request that ends before any vendor is asked (no candidate, every
+candidate skipped for a full queue) closes that entry as `not sent` with the reason, instead of
+leaving nothing on screen.
+
+Each entry carries `sent_at` (arrived), `started_at` (first vendor call), `ts` (answered),
+`latency_ms`, `first_ms` (headers back, for a stream) and `tokens` as the vendor billed them (`in`, `out`, `cached`, `reasoning`), or a
 chars/4 estimate flagged `estimated` when the vendor said nothing.
 
 Every change bumps a recorder-wide `rev`, and `GET api/recorder?since=<rev>` returns only the

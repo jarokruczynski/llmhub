@@ -1608,6 +1608,7 @@ body.rec-wide .studio-main {
   opacity: 0.8;
 }
 
+.rec-answer.rec-queued .rec-reply,
 .rec-answer.rec-pending .rec-reply,
 .rec-answer.rec-streaming .rec-reply {
   border-left: 3px solid var(--status-cooldown);
@@ -1619,6 +1620,36 @@ body.rec-wide .studio-main {
 
 .rec-answer.rec-streaming .rec-reply {
   border-left-color: var(--cap-text);
+}
+
+.rec-answer.rec-queued .rec-reply {
+  border-left-color: var(--status-disabled);
+  border-style: dashed;
+}
+
+.rec-took {
+  display: inline-block;
+  font-size: 0.74rem;
+  font-weight: 700;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
+  padding: 0 0.5rem;
+}
+
+.rec-answer.rec-ok .rec-took {
+  color: var(--status-ready);
+  border-color: color-mix(in srgb, var(--status-ready) 40%, transparent);
+}
+
+.rec-answer.rec-failed .rec-took {
+  color: var(--status-depleted);
+}
+
+.rec-answer.rec-pending .rec-took,
+.rec-answer.rec-queued .rec-took {
+  color: var(--status-cooldown);
 }
 
 .rec-spinner {

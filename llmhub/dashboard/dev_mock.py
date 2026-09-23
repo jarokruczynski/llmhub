@@ -1781,18 +1781,38 @@ def _rec_play_one(app: str, turn: int) -> None:
     request_id = RECORDER.next_request()
     models = random.sample(_REC_MODELS, k=len(_REC_MODELS))
     attempts = 1 + (random.random() < 0.25) + (random.random() < 0.1)
+    with RECORDER_LOCK:
+        queued = RECORDER.begin(
+            app=app,
+            model_request=str(body["model"]),
+            entry_key="",
+            account="",
+            kind=kind,
+            body=body,
+            request_id=request_id,
+            status="queued",
+        )
+    if queued is None:
+        return
+    if random.random() < 0.4:
+        # a busy pair: the request stands in line before its first attempt
+        time.sleep(random.uniform(1.0, 8.0))
     for attempt in range(1, attempts + 1):
         with RECORDER_LOCK:
-            entry = RECORDER.begin(
-                app=app,
-                model_request=str(body["model"]),
-                entry_key=models[attempt - 1],
-                account=models[attempt - 1].split("/")[0] + "-main",
-                kind=kind,
-                body=body,
-                request_id=request_id,
-                attempt=attempt,
-            )
+            if attempt == 1:
+                RECORDER.claim(queued, entry_key=models[0], account=models[0].split("/")[0] + "-main")
+                entry = queued
+            else:
+                entry = RECORDER.begin(
+                    app=app,
+                    model_request=str(body["model"]),
+                    entry_key=models[attempt - 1],
+                    account=models[attempt - 1].split("/")[0] + "-main",
+                    kind=kind,
+                    body=body,
+                    request_id=request_id,
+                    attempt=attempt,
+                )
         if entry is None:
             return
         wait = random.uniform(0.4, 9.0)

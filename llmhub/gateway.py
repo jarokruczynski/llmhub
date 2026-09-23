@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .auth import require_token
 from .config import CLI_KIND, Entry
 from .quota import estimate_request_cost
-from .recorder import begin_call, note_call, note_failure, note_stream_end
+from .recorder import begin_call, begin_request, close_request, note_call, note_failure, note_stream_end
 from .router import (
     ABANDONED_STATUS,
     CANCEL_BY_OWNER,
@@ -593,6 +593,55 @@ async def execute_chat(
     max_latency_ms: int | None = None,
     on_attempt: Callable[[dict[str, Any]], None] | None = None,
 ) -> RunResult:
+    call_kind = kind or ("stream" if stream else "sync")
+    recorder = getattr(hub, "recorder", None)
+    request_id = recorder.next_request() if recorder is not None else None
+    queued = begin_request(hub, body, app, call_kind, request_id)
+    try:
+        return await _run_chat(
+            hub,
+            body=body,
+            app=app,
+            model_request=model_request,
+            require=require,
+            prefer=prefer,
+            allow_paid=allow_paid,
+            stream=stream,
+            call_kind=call_kind,
+            job_id=job_id,
+            min_context=min_context,
+            avoid=avoid,
+            max_latency_ms=max_latency_ms,
+            on_attempt=on_attempt,
+            request_id=request_id,
+            queued=queued,
+        )
+    except (Exception, asyncio.CancelledError) as exc:
+        # nothing was sent when the queued entry is still open: no candidate, or every one
+        # skipped before its slot came free
+        close_request(hub, queued, exc)
+        raise
+
+
+async def _run_chat(
+    hub: Hub,
+    *,
+    body: dict[str, Any],
+    app: str,
+    model_request: str,
+    require: list[str] | None,
+    prefer: list[str] | None,
+    allow_paid: bool,
+    stream: bool,
+    call_kind: str,
+    job_id: str | None,
+    min_context: int | None,
+    avoid: list[str] | None,
+    max_latency_ms: int | None,
+    on_attempt: Callable[[dict[str, Any]], None] | None,
+    request_id: int | None,
+    queued: Any,
+) -> RunResult:
     est_in, est_out = estimate_request_cost(body)
     selection = hub.router.select(
         model_request=model_request,
@@ -611,13 +660,11 @@ async def execute_chat(
     if not selection.candidates:
         raise NoCandidatesError("no eligible model with quota", selection.rejected, selection.constraints)
 
-    call_kind = kind or ("stream" if stream else "sync")
-    recorder = getattr(hub, "recorder", None)
-    request_id = recorder.next_request() if recorder is not None else None
-
     async def call(entry: Entry, attempt_no: int) -> Any:
         # opened before the call, so the console shows the prompt while the model is thinking
-        opened = begin_call(hub, entry, body, app, call_kind, request_id=request_id, attempt=attempt_no)
+        opened = begin_call(
+            hub, entry, body, app, call_kind, request_id=request_id, attempt=attempt_no, queued=queued
+        )
         try:
             result = await call_model(hub, entry, body, app, attempt_no, stream=stream)
         except (Exception, asyncio.CancelledError) as exc:
