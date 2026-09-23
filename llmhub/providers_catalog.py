@@ -39,8 +39,8 @@ ANTIGRAVITY_MODEL_NOTE = (
     "empty directory), limits unknown"
 )
 # the Gemini ids see an image the hub writes to the workdir and the agent opens with view_file;
-# measured 2026-09-24 on 3.6-flash-low and 3.1-pro-low. The Claude and GPT ids are left text
-# only until one of them is measured the same way.
+# measured 2026-09-24 on 3.6-flash-low and 3.1-pro-low. The Claude ids carry vision on the
+# owner's call without a measurement yet (their pool was empty that night); gpt-oss is text only.
 ANTIGRAVITY_VISION_NOTE = (
     "free via the signed-in agy CLI; images reach it as files the agent opens with view_file "
     "(one extra agent turn per call), no tools, limits unknown"
@@ -1040,15 +1040,15 @@ PROVIDER_TEMPLATES: tuple[dict[str, Any], ...] = (
             },
             {
                 "id": "claude-sonnet-4-6",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "claude-opus-4-6-thinking",
-                "caps": ["text", "json", "reasoning"],
+                "caps": ["text", "json", "reasoning", "vision"],
                 "free": {},
-                "notes": ANTIGRAVITY_MODEL_NOTE,
+                "notes": ANTIGRAVITY_VISION_NOTE,
             },
             {
                 "id": "gpt-oss-120b-medium",

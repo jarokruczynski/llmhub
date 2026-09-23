@@ -1223,11 +1223,25 @@ images; Copilot keeps the 400 "cli providers take text only".
   answering.]`, and `--add-dir` is only passed when the request has images.
   Measured on a 64x64 green PNG with a neutral file name: gemini-3.6-flash-low "Green",
   12.9k in / 201 out, 13.7 s; gemini-3.1-pro-low "Green", 19.3k in / 427 out, 6.7 s. The
-  extra view_file turn is part of that cost. The Claude ids could not be measured (weekly
-  Claude/GPT quota at 0% on both logins), so only the Gemini ids carry `vision`.
+  extra view_file turn is part of that cost. The Claude ids carry `vision` on the owner's
+  call but are not measured yet: the Claude/GPT weekly pool was at 0% that night.
+  gpt-oss-120b stays text only.
 - gemini: `@<name>` relative to the cwd inlines the file (png, jpeg, webp), anywhere in the
   prompt, on its own line, several per prompt. Verified 2026-09-24 with gemini-3-flash-preview
   on the API-key path. The template ids carry `vision`, but the login path is dead (above).
+
+Quota: an agy refusal reads "Individual quota reached. ... Resets in 11h1m43s." (after
+about two minutes of agy's own retries). `Resets in <duration>` is now one of the
+retry-after phrases in `vendor_errors`, so the pair is parked until that instant rather than
+until the template's daily default. The pools are per model group (Gemini; Claude and GPT),
+each with a weekly and a five-hour limit, readable without spending anything via
+`agy -p /quota --output-format json`. Measured 2026-09-24: the two logins are two Google
+accounts, but they draw on ONE pool - six flash calls on the second login moved the first
+login's five-hour counter in lockstep, same reset second. The second block adds no budget;
+it is kept because it costs nothing. Because the pool is shared, the 2026-09-17 disables
+on `antigravity` (the flash ids and gpt-oss, reserved so scanner traffic cannot burn the
+window the pro and sonnet models need) are mirrored on `antigravity-2`; without that the
+second block would reopen the same pool to the `auto` and `vision` tails.
 
 Routing: a model with `vision` in `caps` enters the `vision` alias pool and matches
 `X-Hub-Require: vision` like any other. The pool is every entry, sorted with the alias

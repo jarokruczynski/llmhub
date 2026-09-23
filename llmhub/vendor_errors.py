@@ -236,6 +236,9 @@ RETRY_AFTER_PHRASES: tuple[re.Pattern[str], ...] = (
     re.compile(r"try again in\s+(.{1,40})", re.IGNORECASE),
     re.compile(r"retry after\s+(.{1,40})", re.IGNORECASE),
     re.compile(r"retry in\s+(.{1,40})", re.IGNORECASE),
+    # agy: "Individual quota reached. ... Resets in 11h1m43s." - the pool's own reset, weekly or
+    # five-hourly, so it beats the template's daily default by hours in either direction
+    re.compile(r"resets in\s+(.{1,40})", re.IGNORECASE),
     re.compile(r"[\"']?retry[_-]after[\"']?\s*[:=]\s*[\"']?(\d+(?:\.\d+)?)", re.IGNORECASE),
     # google puts it in the error details as a RetryInfo `retryDelay: "9.026s"`
     re.compile(r"[\"']?retry[_-]?delay[\"']?\s*[:=]\s*[\"']?(\d+(?:\.\d+)?\s*[a-z]*)", re.IGNORECASE),

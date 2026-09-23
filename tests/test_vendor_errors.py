@@ -474,6 +474,19 @@ def test_retry_after_from_a_plain_english_delay() -> None:
     assert classify(429, body, "alpha").retry_after_s == 30.0
 
 
+def test_an_agy_quota_refusal_parks_until_the_reset_it_names() -> None:
+    # the real 1.2.9 output: JSON on stdout, the same text twice more on stderr
+    text = (
+        '{"conversation_id":"8f04ac85","status":"ERROR","response":"","error":"Individual quota '
+        'reached. Please upgrade your subscription to increase your limits. Resets in 11h1m43s."}\n'
+        'AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached.",'
+        '"status":"RESOURCE_EXHAUSTED","error_code":429}'
+    )
+    result = classify(None, text, "antigravity")
+    assert (result.kind, result.rule) == ("quota", "antigravity-quota")
+    assert result.retry_after_s == 11 * 3600 + 60 + 43
+
+
 def test_retry_after_from_a_header_when_the_body_says_nothing() -> None:
     result = classify(429, json.dumps({"error": {"message": "slow down"}}), "alpha", {"Retry-After": "45"})
     assert result.retry_after_s == 45.0
