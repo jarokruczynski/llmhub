@@ -425,7 +425,7 @@ falls back to a built-in tag stripper.
 ## Dashboard tabs
 
 One console, served at the root of wherever the hub is mounted: `http://127.0.0.1:8800/` on the
-machine itself, `http://<host>/hub/` behind a proxy that strips a prefix. Nine tabs. Lists offer
+machine itself, `http://<host>/hub/` behind a proxy that strips a prefix. Ten tabs. Lists offer
 a dense table or a card layout and remember which you picked, per list, in the browser; table
 headers sort on click without dropping an active filter.
 
@@ -437,7 +437,9 @@ headers sort on click without dropping an active filter.
 - **Models Fleet** - every (provider, model, account): status, each quota window with its used
   and its reset countdown, today's usage, latency, and the last failure with how long ago it
   was. A failure is shown only while it is the newest thing on record - a later success retires
-  it. Per row: forgive a cooldown, probe the pair, disable or re-enable it.
+  it. Per row: forgive a cooldown, probe the pair, disable or re-enable it. A refusal older than
+  the hub's recent-failure window (6 h) no longer counts against the badge and stays on the card
+  as muted history.
 - **Routing & Matrix** - the routing aliases, which are the profiles a client asks for by name
   (`"model": "auto"`): a preference order plus a spread that decides how widely the traffic is
   fanned out. Editable here, validated against the live registry, and a simulator that shows
@@ -451,6 +453,12 @@ headers sort on click without dropping an active filter.
   would have cost on a paid vendor. The baseline is named on the page along with the date its
   prices were read, because a figure without either is not worth reading.
 - **Events Log** - recent errors, quota hits and fallbacks, filterable by kind, app and model.
+- **Recorder** - what each app actually sent and what came back, off until you start it for a
+  window (5 to 120 minutes), in memory only and cleared on every start. Each app is a chat pane;
+  one fills the screen, up to four share it, and a bar at the top shows or hides each session. A
+  request shows as soon as it arrives, while it queues for a slot, then each attempt with how
+  long it took, the model and account, and the tokens billed. The one read in the console that
+  needs the token even on the LAN, because it returns the text itself.
 
 ## Running as a service
 

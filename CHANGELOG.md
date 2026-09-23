@@ -10,14 +10,7 @@ for the record but have no tags: those commits are not part of this repository.
 
 ## [Unreleased]
 
-### Fixed
-
-- A verification probe is bounded by `Settings.probe_timeout_s` (60 s, env
-  `LLMHUB_PROBE_TIMEOUT_S`) and reports `timeout` instead of waiting out the client read timeout,
-  which is ten minutes. Quick add ran into exactly that against a vendor that accepts the
-  connection and never answers: the dialog looked dead and repeated clicks stacked six
-  ten-minute probes. The dialog also disables its button while it works, says what it is waiting
-  for, and no longer swallows a rejected request.
+## [0.6.0] - 2026-09-24
 
 ### Added
 
@@ -41,13 +34,48 @@ for the record but have no tags: those commits are not part of this repository.
   they pass through. History an app resends on every call is folded away. The console polls
   with `since=<rev>` and draws only what changed, so reading an older message is no longer
   thrown back to the top every two seconds.
+- A request shows in the recorder as it arrives, while it waits for a free slot, and the first
+  attempt takes it over. Footers lead with how long the app waited, from send to answer across
+  the queue and refused attempts ("answered in 1 min 05 s"), then the split ("queued 40 s +
+  model 25 s"). A request that ends before any vendor is asked shows as `not sent` with the
+  reason.
+- Images for the agy and gemini-cli backends: `data:` image parts are written to the provider
+  workdir, referenced from the prompt (agy via view_file, gemini-cli via `@name`) and removed
+  after the run. Remote image URLs stay a 400; copilot stays text only. Vision cap on the
+  antigravity Gemini and Claude ids and the gemini-cli ids.
+- An agy provider with its own HOME keeps its token in a file instead of a keychain that does
+  not exist there, and the auth hint prints the login line with the provider env.
+
+### Changed
+
+- The Playground settings say what they do: three steps (who answers, what you ask, how it
+  answers), a sentence per field, a live description of the chosen routing profile (models tried
+  in order, fallback, spread, required capabilities) or of a single model with no fallback,
+  temperature as a labelled slider, and the length limit converted to words.
 
 ### Fixed
 
+- A verification probe is bounded by `Settings.probe_timeout_s` (60 s, env
+  `LLMHUB_PROBE_TIMEOUT_S`) and reports `timeout` instead of waiting out the client read timeout,
+  which is ten minutes. Quick add ran into exactly that against a vendor that accepts the
+  connection and never answers: the dialog looked dead and repeated clicks stacked six
+  ten-minute probes. The dialog also disables its button while it works, says what it is waiting
+  for, and no longer swallows a rejected request.
 - A model card no longer shows a red quota banner under a green "ok" badge. The hub stops
   holding a refusal against a pair after six hours; the card kept showing it until a success
   came after it, which for a pair nothing had retried meant forever. A refusal the hub no longer
   counts is shown as muted history ("last refusal 3d ago") instead of a warning.
+- Jobs are no longer failed by a pool-wide transient refusal. A job whose attempts all ended in
+  statuses that time can fix (quota, retry, unavailable, abandoned) is parked until its deadline
+  instead of failed; too_large, unsupported_param, not_found, auth and error still fail it. A
+  dead key next to a transient refusal parks too, while a pool that only answered `auth` fails.
+  An auth refusal now parks the pair as unavailable and writes an `unavailable` event, so a
+  broken key shows on the pair instead of killing jobs.
+- Every park carries a backoff. A park with a known next window left `next_attempt_at` empty,
+  so the job was claimed again on every 2 s poll; one job reached 10204 attempts in six hours.
+  Forgive clears the backoff of parked jobs and reports how many it woke.
+- An agy quota refusal ("Resets in 11h1m43s") parks the pair until the named reset instead of
+  the template's daily default.
 
 ### Security
 
@@ -393,5 +421,6 @@ for the record but have no tags: those commits are not part of this repository.
 
 - Dashboard table layout for the Promos, Events and Models tabs.
 
+[0.6.0]: https://github.com/jarokruczynski/llmhub/releases/tag/v0.6.0
 [0.5.0]: https://github.com/jarokruczynski/llmhub/releases/tag/v0.5.0
 [0.4.0]: https://github.com/jarokruczynski/llmhub/releases/tag/v0.4.0
