@@ -60,7 +60,7 @@ def strip_tags(html: str) -> str:
         parser.feed(html)
         parser.close()
     except Exception:  # noqa: BLE001 - malformed markup is still worth what parsed so far
-        pass
+        log.debug("markup did not parse to the end, keeping what did", exc_info=True)
     text = "".join(parser.parts)
     text = re.sub(r"[ \t\r\f\v]+", " ", text)
     return re.sub(r"\n\s*\n+", "\n\n", text).strip()

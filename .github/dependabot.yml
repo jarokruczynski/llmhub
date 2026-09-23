@@ -4,7 +4,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # a release a day old has not been looked at by anyone yet; wait before proposing it
+    cooldown:
+      default-days: 7
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    # a release a day old has not been looked at by anyone yet; wait before proposing it
+    cooldown:
+      default-days: 7

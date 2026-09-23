@@ -220,8 +220,10 @@ class HealthSweepService:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            except asyncio.CancelledError:
                 pass
+            except Exception:
+                log.exception("health sweep ended with an error")
         self._task = None
 
     async def _loop(self) -> None:

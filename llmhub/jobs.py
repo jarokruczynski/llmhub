@@ -249,8 +249,10 @@ class JobQueue:
             self._task.cancel()
             try:
                 await self._task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001
+            except asyncio.CancelledError:
                 pass
+            except Exception:
+                log.exception("job dispatcher ended with an error")
             self._task = None
 
     async def _loop(self) -> None:

@@ -366,6 +366,7 @@ class Store:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
+        self._columns: dict[str, frozenset[str]] = {}
         self.migrate()
 
     def close(self) -> None:
@@ -387,6 +388,26 @@ class Store:
             for statement in INDEXES:
                 cur.execute(statement)
             self._conn.commit()
+            self._columns.clear()
+
+    def assignments(self, table: str, fields: Iterable[str]) -> str:
+        """`a = ?, b = ?` for an UPDATE, with every name checked against the table's columns.
+
+        Values always travel as parameters; the names cannot, so a name that is not a column of
+        `table` is refused rather than pasted into the statement.
+        """
+        columns = self._columns.get(table)
+        if columns is None:
+            with self._lock:
+                columns = frozenset(row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})"))
+            if not columns:
+                raise ValueError(f"unknown table {table!r}")
+            self._columns[table] = columns
+        names = list(fields)
+        unknown = [name for name in names if name not in columns]
+        if unknown:
+            raise ValueError(f"not a column of {table}: {', '.join(map(repr, unknown))}")
+        return ", ".join(f"{name} = ?" for name in names)
 
     def execute(self, sql: str, params: Iterable[Any] = ()) -> sqlite3.Cursor:
         with self._lock:
@@ -1065,7 +1086,7 @@ class Store:
         ):
             if str(value or "").strip():
                 fields[name] = value
-        sets = ", ".join(f"{name} = ?" for name in fields)
+        sets = self.assignments("promos", fields)
         self.execute(f"UPDATE promos SET {sets} WHERE id = ?", (*fields.values(), promo_id))
         return self.promo(promo_id) or {}, False
 
@@ -1140,7 +1161,7 @@ class Store:
     def update_promo(self, promo_id: int, **fields: Any) -> dict[str, Any] | None:
         fields = {name: value for name, value in fields.items() if value is not None}
         if fields:
-            sets = ", ".join(f"{name} = ?" for name in fields)
+            sets = self.assignments("promos", fields)
             self.execute(f"UPDATE promos SET {sets} WHERE id = ?", (*fields.values(), promo_id))
         return self.promo(promo_id)
 
@@ -1168,7 +1189,7 @@ class Store:
     def update_scout_run(self, run_id: int, **fields: Any) -> None:
         if not fields:
             return
-        sets = ", ".join(f"{name} = ?" for name in fields)
+        sets = self.assignments("scout_runs", fields)
         self.execute(f"UPDATE scout_runs SET {sets} WHERE id = ?", (*fields.values(), run_id))
 
     def scout_run(self, run_id: int) -> dict[str, Any] | None:
@@ -1272,7 +1293,7 @@ class Store:
         if not fields:
             return
         fields["updated_at"] = now_iso()
-        sets = ", ".join(f"{name} = ?" for name in fields)
+        sets = self.assignments("jobs", fields)
         self.execute(f"UPDATE jobs SET {sets} WHERE id = ?", (*fields.values(), job_id))
 
     def wake_parked_jobs(self) -> int:

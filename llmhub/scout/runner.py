@@ -169,8 +169,10 @@ class ScoutService:
                 task.cancel()
                 try:
                     await task
-                except (asyncio.CancelledError, Exception):  # noqa: BLE001
+                except asyncio.CancelledError:
                     pass
+                except Exception:
+                    log.exception("scout task ended with an error")
         self._scheduler = None
         self._task = None
 

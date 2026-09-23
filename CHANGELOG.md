@@ -49,6 +49,17 @@ for the record but have no tags: those commits are not part of this repository.
   came after it, which for a pair nothing had retried meant forever. A refusal the hub no longer
   counts is shown as muted history ("last refusal 3d ago") instead of a warning.
 
+### Security
+
+- `UPDATE` statements whose columns come from keyword arguments (jobs, promos, scout runs) check
+  every name against the table's columns and refuse the rest. Values were always bound as
+  parameters and every caller passes fixed names, so nothing was reachable; the check keeps it
+  that way when a caller one day forwards a request body.
+- CI actions are pinned to commit SHAs, and Dependabot waits seven days before proposing a new
+  release of a dependency or an action.
+- Background tasks that ended with an error on shutdown (health sweep, job dispatcher, scout)
+  log it instead of discarding it silently.
+
 ## [0.5.0] - 2026-09-17
 
 ### Removed
