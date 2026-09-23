@@ -25,12 +25,22 @@ for the record but have no tags: those commits are not part of this repository.
   turned on. `POST api/recorder/start` arms it for a window (20 minutes by default, 120 maximum)
   and clears whatever the previous run caught; it stops on its own when the window ends.
   Deliberately in memory rather than the database - at the observed rate, storing prompt text
-  would be gigabytes a day - so it is capped at 200 entries and 4000 characters a side, and does
-  not survive a restart. `GET api/recorder` is the only read in the console that requires the
-  token, because it is the only one that returns the text itself. Refused attempts are recorded
-  too, with what the vendor said instead of an answer: a failing attempt raises out of the
-  backend, so recording only the success path left a recorder armed during a quota storm
-  reporting that nothing had gone through the hub.
+  would be gigabytes a day - so it is capped at 200 attempts, 6000 characters a message and
+  24000 a prompt, and does not survive a restart. `GET api/recorder` is the only read in the
+  console that requires the token, because it is the only one that returns the text itself.
+  Refused attempts are recorded too, with what the vendor said instead of an answer: a failing
+  attempt raises out of the backend, so recording only the success path left a recorder armed
+  during a quota storm reporting that nothing had gone through the hub.
+- The recorder reads as chats. Each app is a session with its own pane; one session fills the
+  screen, two split it, up to four share it, and a bar at the top turns each session on or off.
+  An attempt is opened when it is sent, so the prompt shows while the model is still thinking,
+  and closed when the answer, the refusal or the end of the stream arrives. Attempts of one
+  request share a `request_id` and read as one prompt with several answers. Each answer carries
+  when it came, how long it took (and the first byte, for a stream), the model, the account and
+  the tokens the vendor billed, or an estimate marked as one. Streamed answers are captured as
+  they pass through. History an app resends on every call is folded away. The console polls
+  with `since=<rev>` and draws only what changed, so reading an older message is no longer
+  thrown back to the top every two seconds.
 
 ## [0.5.0] - 2026-09-17
 

@@ -1357,10 +1357,13 @@ async def recorder_stop(request: Request) -> dict[str, Any]:
 
 
 @router.get("/recorder")
-async def recorder_dump(request: Request) -> dict[str, Any]:
-    """The only read in the console that needs the token: this one returns the text itself."""
+async def recorder_dump(request: Request, since: int | None = None) -> dict[str, Any]:
+    """The only read in the console that needs the token: this one returns the text itself.
+
+    `since` is the `rev` of the previous read; only entries opened or changed after it come back.
+    """
     require_token(request)
-    return hub_of(request).recorder.dump()
+    return hub_of(request).recorder.dump(since=since)
 
 
 @router.get("/baselines")

@@ -1307,3 +1307,470 @@ body {
   gap: 0.75rem;
   font-size: 0.82rem;
 }
+
+/* ==================== Prompt Recorder ==================== */
+body.rec-wide .studio-main {
+  max-width: none;
+}
+
+.rec-panel.active {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.rec-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
+.rec-toolbar .select {
+  font-size: 0.8rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.rec-state {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.rec-state.rec-on {
+  color: var(--status-ready);
+  font-weight: 600;
+}
+
+.rec-meta,
+.rec-info {
+  font-size: 0.78rem;
+}
+
+.rec-info {
+  cursor: help;
+}
+
+.rec-focus-btn {
+  margin-left: auto;
+}
+
+.rec-sessions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  min-height: 2rem;
+  align-items: center;
+}
+
+.rec-bar-empty {
+  font-size: 0.8rem;
+}
+
+.rec-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: var(--transition);
+}
+
+.rec-chip:hover {
+  border-color: var(--border-strong);
+}
+
+.rec-chip.on {
+  border-color: var(--accent-primary);
+  background: var(--accent-glow);
+  color: var(--text-primary);
+}
+
+.rec-chip-name {
+  font-weight: 600;
+}
+
+.rec-chip-meta {
+  font-size: 0.72rem;
+  color: var(--text-secondary);
+  font-feature-settings: "tnum";
+}
+
+.rec-chip-eye {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 1px 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-card);
+}
+
+.rec-chip.on .rec-chip-eye {
+  color: var(--accent-primary);
+}
+
+.rec-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--status-disabled);
+  flex: none;
+}
+
+.rec-dot.active {
+  background: var(--status-ready);
+}
+
+.rec-dot.waiting {
+  background: var(--status-cooldown);
+  animation: recPulse 1.2s ease-in-out infinite;
+}
+
+@keyframes recPulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.rec-grid {
+  display: grid;
+  gap: 0.6rem;
+  min-height: 360px;
+  grid-template-columns: 1fr;
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.rec-grid[data-n="2"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.rec-grid[data-n="3"],
+.rec-grid[data-n="4"] {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+}
+
+.rec-grid[data-n="3"] .rec-empty + .rec-pane {
+  grid-row: span 2;
+}
+
+.rec-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--border-subtle);
+  border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  padding: 2rem;
+}
+
+.rec-empty[hidden] {
+  display: none;
+}
+
+.rec-pane {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.rec-pane-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-card);
+  font-size: 0.82rem;
+}
+
+.rec-pane-title {
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.rec-pane-meta {
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-feature-settings: "tnum";
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+
+.rec-pane-close {
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+  padding: 0 0.25rem;
+}
+
+.rec-pane-close:hover {
+  color: var(--text-primary);
+}
+
+.rec-pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+
+.rec-jump {
+  position: absolute;
+  bottom: 0.75rem;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 1px solid var(--accent-primary);
+  background: var(--accent-primary);
+  color: #fff;
+  border-radius: var(--radius-full);
+  font-size: 0.78rem;
+  padding: 0.25rem 0.8rem;
+  cursor: pointer;
+  box-shadow: var(--shadow-md);
+}
+
+.rec-jump[hidden] {
+  display: none;
+}
+
+.rec-req {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.rec-bubble {
+  border-radius: var(--radius-md);
+  padding: 0.55rem 0.75rem;
+  font-size: 0.82rem;
+  min-width: 0;
+}
+
+.rec-prompt {
+  align-self: flex-end;
+  width: min(100%, 92%);
+  background: var(--accent-glow);
+  border: 1px solid color-mix(in srgb, var(--accent-primary) 35%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.rec-answers {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+}
+
+.rec-answer {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  align-self: flex-start;
+  width: min(100%, 92%);
+}
+
+.rec-reply {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+}
+
+.rec-answer.rec-ok .rec-reply {
+  border-left: 3px solid var(--status-ready);
+}
+
+.rec-answer.rec-failed .rec-reply {
+  border-left: 3px solid var(--status-depleted);
+  background: var(--status-depleted-bg);
+}
+
+.rec-answer.rec-cancelled .rec-reply {
+  border-left: 3px solid var(--status-disabled);
+  opacity: 0.8;
+}
+
+.rec-answer.rec-pending .rec-reply,
+.rec-answer.rec-streaming .rec-reply {
+  border-left: 3px solid var(--status-cooldown);
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.rec-answer.rec-streaming .rec-reply {
+  border-left-color: var(--cap-text);
+}
+
+.rec-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border-strong);
+  border-top-color: var(--status-cooldown);
+  border-radius: 50%;
+  animation: recSpin 0.8s linear infinite;
+  flex: none;
+}
+
+@keyframes recSpin {
+  to { transform: rotate(360deg); }
+}
+
+.rec-stamp {
+  font-size: 0.7rem;
+  color: var(--text-muted);
+  font-feature-settings: "tnum";
+  padding: 0 0.25rem;
+}
+
+.rec-stamp-right {
+  align-self: flex-end;
+  text-align: right;
+}
+
+.rec-msg + .rec-msg {
+  border-top: 1px dashed var(--border-subtle);
+  padding-top: 0.45rem;
+}
+
+.rec-role {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 0.15rem;
+}
+
+.rec-role-user .rec-role {
+  color: var(--accent-primary);
+}
+
+.rec-role-assistant .rec-role {
+  color: var(--status-ready);
+}
+
+.rec-role-system .rec-role {
+  color: var(--cap-json);
+}
+
+.rec-role-tool .rec-role,
+.rec-role-reasoning .rec-role {
+  color: var(--cap-reasoning);
+}
+
+.rec-repeated {
+  opacity: 0.6;
+}
+
+.rec-text {
+  font-family: var(--font-mono);
+  font-size: 0.78rem;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.rec-text.clamped {
+  max-height: 17em;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent);
+  mask-image: linear-gradient(to bottom, #000 70%, transparent);
+}
+
+.rec-more,
+.rec-fold {
+  border: none;
+  background: transparent;
+  color: var(--accent-primary);
+  font-family: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+  padding: 0.15rem 0;
+  text-align: left;
+}
+
+.rec-more:hover,
+.rec-fold:hover {
+  text-decoration: underline;
+}
+
+.rec-fold {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.rec-reasoning {
+  margin-bottom: 0.45rem;
+  font-size: 0.75rem;
+}
+
+.rec-reasoning summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+
+body.rec-focus .studio-header,
+body.rec-focus .studio-nav {
+  display: none;
+}
+
+body.rec-focus .studio-main {
+  padding: 0;
+}
+
+body.rec-focus .rec-panel.active {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: var(--bg-app);
+  padding: 0.6rem;
+}
+
+body.rec-focus .rec-grid {
+  flex: 1;
+  min-height: 0;
+}
+
+@media (max-width: 900px) {
+  .rec-grid,
+  .rec-grid[data-n="2"],
+  .rec-grid[data-n="3"],
+  .rec-grid[data-n="4"] {
+    grid-template-columns: 1fr;
+    grid-template-rows: none;
+    grid-auto-rows: 75vh;
+  }
+
+  .rec-grid[data-n="3"] .rec-empty + .rec-pane {
+    grid-row: auto;
+  }
+
+  body.rec-focus .rec-grid {
+    overflow-y: auto;
+  }
+
+  .rec-focus-btn {
+    margin-left: 0;
+  }
+}

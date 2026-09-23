@@ -298,70 +298,565 @@
 
   // --- Prompt recorder -------------------------------------------------
   // Deliberately not polled with the rest of the console: it only runs while the tab is open
-  // and the recorder is armed, because this is the one view that pulls prompt text over HTTP.
-  let recorderTimer = null;
+  // and something is still coming in, because this is the one view that pulls prompt text over
+  // HTTP. Each app is a session with its own chat pane; up to four are shown side by side.
+  //
+  // Nothing already on screen is redrawn. A poll asks only for what changed since the last one
+  // (`since=rev`), new requests are appended, and only the answers of a request still in flight
+  // are replaced. Redrawing the whole list every two seconds is what threw every scroll back to
+  // the top.
+  const REC_MAX_PANES = 4;
+  const REC_POLL_MS = 1500;
+  const REC_CLAMP_CHARS = 1400;
+  const REC_CLAMP_LINES = 18;
+  const REC_ACTIVE_MS = 60000;
+  const REC_OPEN = ['pending', 'streaming'];
 
-  function recorderRow(row) {
-    const meta = [row.app, row.model, row.status, `${formatNumber(row.latency_ms)} ms`, timeAgo(row.ts)]
-      .filter(Boolean)
-      .map((bit) => escapeHtml(String(bit)))
-      .join(' · ');
-    const block = (label, text) => `
-      <div style="margin-top:0.5rem">
-        <div class="text-muted" style="font-size:0.7rem; text-transform:uppercase; letter-spacing:0.05em">${label}</div>
-        <pre style="margin:2px 0 0; padding:8px 10px; background:var(--bg-card); border:1px solid var(--border-subtle); border-radius:6px; font-size:0.78rem; white-space:pre-wrap; word-break:break-word; max-height:16rem; overflow:auto">${escapeHtml(text || '(empty)')}</pre>
-      </div>`;
-    return `
-      <div class="section-card" style="margin-bottom:0.75rem">
-        <div style="font-size:0.78rem; font-weight:600">${meta}${row.truncated ? ' <span class="text-muted">· clipped</span>' : ''}</div>
-        ${block('Prompt', row.prompt)}
-        ${block('Answer', row.answer)}
-      </div>`;
+  function readStoredList(key) {
+    try {
+      const raw = JSON.parse(localStorage.getItem(key) || '[]');
+      return Array.isArray(raw) ? raw.map(String) : [];
+    } catch (e) {
+      return [];
+    }
   }
 
-  function renderRecorder(data) {
+  function writeStoredList(key, values) {
+    try {
+      localStorage.setItem(key, JSON.stringify([...values]));
+    } catch (e) {
+      /* a private window: the choice lasts until reload */
+    }
+  }
+
+  const rec = {
+    timer: null,
+    ticker: null,
+    rev: null,
+    startedAt: undefined,
+    status: null,
+    entries: new Map(),
+    visible: new Set(readStoredList('llmhub_rec_visible')),
+    hidden: new Set(readStoredList('llmhub_rec_hidden')),
+    panes: new Map(),
+    expanded: new Set(),
+    loading: false
+  };
+  // the recorder list used to be global; kept so switchTab can stop it the same way
+  let recorderTimer = null;
+
+  function saveRecorderChoice() {
+    writeStoredList('llmhub_rec_visible', rec.visible);
+    writeStoredList('llmhub_rec_hidden', rec.hidden);
+  }
+
+  function clockOf(iso) {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d)) return '';
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  }
+
+  function secondsOf(ms) {
+    if (ms === null || ms === undefined) return '';
+    if (ms < 1000) return `${ms} ms`;
+    if (ms < 60000) return `${(ms / 1000).toFixed(1)} s`;
+    const m = Math.floor(ms / 60000);
+    return `${m} min ${Math.round((ms % 60000) / 1000)} s`;
+  }
+
+  function statusClass(status) {
+    const s = String(status || '');
+    if (s === 'ok') return 'ok';
+    if (s === 'pending') return 'pending';
+    if (s === 'streaming') return 'streaming';
+    if (s === 'cancelled') return 'cancelled';
+    return 'failed';
+  }
+
+  function sessionsOf() {
+    const sessions = new Map();
+    for (const entry of rec.entries.values()) {
+      let session = sessions.get(entry.app);
+      if (!session) {
+        session = { app: entry.app, requests: new Map(), firstId: entry.id, lastAt: 0, open: 0, tokIn: 0, tokOut: 0, estimated: false, latencies: [] };
+        sessions.set(entry.app, session);
+      }
+      session.firstId = Math.min(session.firstId, entry.id);
+      const attempts = session.requests.get(entry.request_id) || [];
+      attempts.push(entry);
+      session.requests.set(entry.request_id, attempts);
+      const at = new Date(entry.ts || entry.sent_at).getTime();
+      if (at > session.lastAt) session.lastAt = at;
+      if (REC_OPEN.includes(entry.status)) session.open += 1;
+      if (entry.tokens) {
+        session.tokIn += entry.tokens.in || 0;
+        session.tokOut += entry.tokens.out || 0;
+        if (entry.tokens.estimated) session.estimated = true;
+      }
+      if (entry.status === 'ok' && entry.latency_ms) session.latencies.push(entry.latency_ms);
+    }
+    for (const session of sessions.values()) {
+      for (const attempts of session.requests.values()) attempts.sort((a, b) => a.attempt - b.attempt || a.id - b.id);
+    }
+    return [...sessions.values()].sort((a, b) => a.firstId - b.firstId);
+  }
+
+  function sessionSummary(session) {
+    const bits = [`${session.requests.size} req`];
+    if (session.tokIn || session.tokOut) {
+      const approx = session.estimated ? '~' : '';
+      bits.push(`in ${approx}${formatTokens(session.tokIn)} · out ${approx}${formatTokens(session.tokOut)} tok`);
+    }
+    if (session.latencies.length) {
+      const avg = session.latencies.reduce((a, b) => a + b, 0) / session.latencies.length;
+      bits.push(`avg ${secondsOf(Math.round(avg))}`);
+    }
+    if (session.open) bits.push(`${session.open} waiting`);
+    return bits.join(' · ');
+  }
+
+  function isActive(session) {
+    return session.open > 0 || Date.now() - session.lastAt < REC_ACTIVE_MS;
+  }
+
+  // a session nobody has decided about yet is shown while there is room for it
+  function adoptNewSessions(sessions) {
+    let changed = false;
+    const present = new Set(sessions.map((s) => s.app));
+    let shown = [...rec.visible].filter((app) => present.has(app)).length;
+    for (const session of sessions) {
+      if (rec.visible.has(session.app) || rec.hidden.has(session.app)) continue;
+      if (shown >= REC_MAX_PANES) break;
+      rec.visible.add(session.app);
+      shown += 1;
+      changed = true;
+    }
+    if (changed) saveRecorderChoice();
+  }
+
+  function toggleSession(app) {
+    if (rec.visible.has(app)) {
+      rec.visible.delete(app);
+      rec.hidden.add(app);
+    } else {
+      rec.hidden.delete(app);
+      const present = new Set(sessionsOf().map((s) => s.app));
+      const shown = [...rec.visible].filter((a) => present.has(a));
+      if (shown.length >= REC_MAX_PANES) {
+        // the one shown longest makes room; the set keeps insertion order
+        const oldest = shown[0];
+        rec.visible.delete(oldest);
+        rec.hidden.add(oldest);
+        notify(`At most ${REC_MAX_PANES} sessions side by side: hid ${oldest}`, 'info');
+      }
+      rec.visible.add(app);
+    }
+    saveRecorderChoice();
+    renderRecorderView();
+  }
+
+  function renderSessionBar(sessions) {
+    const bar = document.getElementById('recorder-sessions');
+    if (!bar) return;
+    if (!sessions.length) {
+      bar.innerHTML = '<span class="text-muted rec-bar-empty">No sessions yet. Each app that calls the hub while recording gets its own.</span>';
+      return;
+    }
+    bar.innerHTML = sessions
+      .map((session) => {
+        const on = rec.visible.has(session.app);
+        const active = isActive(session);
+        return `<button type="button" class="rec-chip${on ? ' on' : ''}" data-app="${escapeHtml(session.app)}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} this session">
+          <span class="rec-dot${session.open ? ' waiting' : active ? ' active' : ''}"></span>
+          <span class="rec-chip-name">${escapeHtml(session.app)}</span>
+          <span class="rec-chip-meta">${escapeHtml(sessionSummary(session))}</span>
+          <span class="rec-chip-eye">${on ? 'visible' : 'hidden'}</span>
+        </button>`;
+      })
+      .join('');
+  }
+
+  // --- one message, one request ---
+  function messageBlock(key, role, text, extraClass = '') {
+    const body = text || '(empty)';
+    const long = body.length > REC_CLAMP_CHARS || body.split('\n').length > REC_CLAMP_LINES;
+    const open = rec.expanded.has(key);
+    return `<div class="rec-msg rec-role-${escapeHtml(role)} ${extraClass}">
+      <div class="rec-role">${escapeHtml(role)}</div>
+      <div class="rec-text${long && !open ? ' clamped' : ''}" data-key="${escapeHtml(key)}">${escapeHtml(body)}</div>
+      ${long ? `<button type="button" class="rec-more" data-key="${escapeHtml(key)}">${open ? 'Show less' : `Show all · ${formatNumber(body.length)} chars`}</button>` : ''}
+    </div>`;
+  }
+
+  function sameMessage(a, b) {
+    return a && b && a.role === b.role && a.text === b.text;
+  }
+
+  // Apps resend the whole conversation on every call. The part a previous request of the same
+  // session already showed is folded away, so a chat reads as a chat and a batch job with one
+  // fixed system prompt shows only what changed.
+  function repeatedPrefix(session, requestId, messages) {
+    let best = { count: 0, from: null };
+    const earlier = [...session.requests.keys()].filter((id) => id < requestId).sort((a, b) => b - a).slice(0, 20);
+    for (const id of earlier) {
+      const previous = session.requests.get(id)[0];
+      const before = previous.messages || [];
+      let n = 0;
+      while (n < before.length && n < messages.length && sameMessage(before[n], messages[n])) n += 1;
+      if (n === before.length && n < messages.length) {
+        const answered = session.requests.get(id).find((row) => row.status === 'ok');
+        if (answered && messages[n].role === 'assistant' && messages[n].text === answered.answer) n += 1;
+      }
+      if (n > best.count) best = { count: n, from: previous };
+      if (n === messages.length) break;
+    }
+    if (best.count) {
+      // answers this pane already shows under their own request, echoed back as history
+      const answers = new Set();
+      for (const id of earlier) {
+        for (const row of session.requests.get(id)) if (row.status === 'ok' && row.answer) answers.add(row.answer);
+      }
+      while (best.count < messages.length && messages[best.count].role === 'assistant' && answers.has(messages[best.count].text)) {
+        best.count += 1;
+      }
+    }
+    return best.count >= messages.length ? { count: Math.max(0, messages.length - 1), from: best.from } : best;
+  }
+
+  function promptBubble(session, requestId, first) {
+    const messages = first.messages || [];
+    const fold = repeatedPrefix(session, requestId, messages);
+    const foldKey = `${requestId}:fold`;
+    const folded = fold.count && !rec.expanded.has(foldKey);
+    const shownFrom = folded ? fold.count : 0;
+    const parts = [];
+    if (fold.count) {
+      parts.push(`<button type="button" class="rec-fold" data-key="${foldKey}">${
+        folded
+          ? `⋯ ${fold.count} earlier message${fold.count > 1 ? 's' : ''} same as the request sent ${clockOf(fold.from.sent_at)} · show`
+          : 'hide the repeated messages'
+      }</button>`);
+    }
+    messages.forEach((m, i) => {
+      if (i < shownFrom) return;
+      parts.push(messageBlock(`${requestId}:m${i}`, m.role, m.text, i < fold.count ? 'rec-repeated' : ''));
+    });
+    if (!messages.length) parts.push(messageBlock(`${requestId}:m0`, 'prompt', first.prompt));
+    return `<div class="rec-bubble rec-prompt">${parts.join('')}</div>`;
+  }
+
+  function promptHtml(session, requestId, first) {
+    const meta = [
+      `sent ${clockOf(first.sent_at)}`,
+      first.model_request && `asked for ${first.model_request}`,
+      first.kind,
+      first.truncated ? 'clipped by the recorder' : ''
+    ].filter(Boolean);
+    return `${promptBubble(session, requestId, first)}
+      <div class="rec-stamp rec-stamp-right">${escapeHtml(meta.join(' · '))}</div>`;
+  }
+
+  function tokensLine(tokens) {
+    if (!tokens) return '';
+    const approx = tokens.estimated ? '~' : '';
+    const bits = [`in ${approx}${formatNumber(tokens.in)}`, `out ${approx}${formatNumber(tokens.out)}`];
+    if (tokens.cached) bits.push(`cached ${formatNumber(tokens.cached)}`);
+    if (tokens.reasoning) bits.push(`reasoning ${formatNumber(tokens.reasoning)}`);
+    return `${bits.join(' · ')} tok${tokens.estimated ? ' (estimated)' : ''}`;
+  }
+
+  function answerHtml(row) {
+    const cls = statusClass(row.status);
+    const who = [row.model, row.account].filter(Boolean).join(' · ');
+    if (cls === 'pending' || cls === 'streaming') {
+      const label = cls === 'pending' ? 'waiting for' : 'streaming from';
+      return `<div class="rec-answer rec-${cls}">
+        <div class="rec-bubble rec-reply"><span class="rec-spinner"></span> ${label} ${escapeHtml(row.model || 'the model')}</div>
+        <div class="rec-stamp"><span class="rec-wait" data-since="${escapeHtml(row.sent_at)}">0 s</span>${
+          row.first_ms != null ? ` · headers after ${secondsOf(row.first_ms)}` : ''
+        } · attempt ${row.attempt} · ${escapeHtml(who)}</div>
+      </div>`;
+    }
+    const reasoning = row.reasoning
+      ? `<details class="rec-reasoning"><summary>reasoning · ${formatNumber(row.reasoning.length)} chars</summary>${messageBlock(`a${row.id}:r`, 'reasoning', row.reasoning)}</details>`
+      : '';
+    const stamp = [
+      clockOf(row.ts),
+      `answered after ${secondsOf(row.latency_ms)}`,
+      row.first_ms != null && row.kind === 'stream' ? `first byte ${secondsOf(row.first_ms)}` : '',
+      cls !== 'ok' ? row.status : '',
+      `attempt ${row.attempt}`,
+      who,
+      tokensLine(row.tokens)
+    ].filter(Boolean);
+    return `<div class="rec-answer rec-${cls}">
+      <div class="rec-bubble rec-reply">${reasoning}${messageBlock(`a${row.id}:t`, cls === 'ok' ? 'assistant' : row.status, row.answer)}</div>
+      <div class="rec-stamp">${escapeHtml(stamp.join(' · '))}</div>
+    </div>`;
+  }
+
+  function answersSignature(attempts) {
+    return attempts.map((row) => `${row.id}:${row.rev}`).join(',');
+  }
+
+  // --- panes ---
+  function createPane(app) {
+    const root = document.createElement('div');
+    root.className = 'rec-pane';
+    root.dataset.app = app;
+    root.innerHTML = `
+      <div class="rec-pane-head">
+        <span class="rec-dot"></span>
+        <span class="rec-pane-title">${escapeHtml(app)}</span>
+        <span class="rec-pane-meta"></span>
+        <button type="button" class="rec-pane-close" title="Hide this session">✕</button>
+      </div>
+      <div class="rec-pane-body"></div>
+      <button type="button" class="rec-jump" hidden>↓ new</button>`;
+    const pane = {
+      app,
+      root,
+      body: root.querySelector('.rec-pane-body'),
+      meta: root.querySelector('.rec-pane-meta'),
+      dot: root.querySelector('.rec-dot'),
+      jump: root.querySelector('.rec-jump'),
+      nodes: new Map(),
+      unseen: 0,
+      // follows the newest message until the reader scrolls away from the bottom
+      stuck: true
+    };
+    root.querySelector('.rec-pane-close').addEventListener('click', () => toggleSession(app));
+    pane.jump.addEventListener('click', () => {
+      pane.body.scrollTop = pane.body.scrollHeight;
+    });
+    pane.body.addEventListener('scroll', () => {
+      pane.stuck = nearBottom(pane.body);
+      if (pane.stuck) {
+        pane.unseen = 0;
+        pane.jump.hidden = true;
+      }
+    });
+    pane.body.addEventListener('click', onRecorderClick);
+    return pane;
+  }
+
+  function nearBottom(el) {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+  }
+
+  function syncPane(pane, session) {
+    let added = 0;
+    const ids = [...session.requests.keys()].sort((a, b) => a - b);
+    for (const id of ids) {
+      const attempts = session.requests.get(id);
+      let node = pane.nodes.get(id);
+      if (!node) {
+        node = document.createElement('div');
+        node.className = 'rec-req';
+        node.dataset.req = String(id);
+        node.innerHTML = `${promptHtml(session, id, attempts[0])}<div class="rec-answers"></div>`;
+        // requests can begin out of order when one waited for a slot; keep them by id
+        const after = [...pane.nodes.keys()].filter((other) => other > id).sort((a, b) => a - b)[0];
+        pane.body.insertBefore(node, after !== undefined ? pane.nodes.get(after) : null);
+        pane.nodes.set(id, node);
+        added += 1;
+      }
+      const signature = answersSignature(attempts);
+      if (node.dataset.sig !== signature) {
+        node.dataset.sig = signature;
+        node.querySelector('.rec-answers').innerHTML = attempts.map(answerHtml).join('');
+      }
+    }
+    // entries the ring pushed out
+    for (const [id, node] of pane.nodes) {
+      if (!session.requests.has(id)) {
+        node.remove();
+        pane.nodes.delete(id);
+      }
+    }
+    pane.meta.textContent = sessionSummary(session);
+    pane.dot.className = `rec-dot${session.open ? ' waiting' : isActive(session) ? ' active' : ''}`;
+    if (pane.stuck) {
+      pane.body.scrollTop = pane.body.scrollHeight;
+    } else if (added) {
+      pane.unseen += added;
+      pane.jump.hidden = false;
+      pane.jump.textContent = `↓ ${pane.unseen} new`;
+    }
+  }
+
+  function keepStuckPanesAtBottom() {
+    for (const pane of rec.panes.values()) {
+      if (pane.stuck) pane.body.scrollTop = pane.body.scrollHeight;
+    }
+  }
+
+  function renderPanes(sessions) {
+    const grid = document.getElementById('recorder-grid');
+    if (!grid) return;
+    const shown = sessions.filter((s) => rec.visible.has(s.app));
+    // a pane that stays keeps its node: moving a node in the DOM would reset its scroll
+    for (const [app, pane] of rec.panes) {
+      if (!shown.some((s) => s.app === app)) {
+        pane.root.remove();
+        rec.panes.delete(app);
+      }
+    }
+    const empty = document.getElementById('recorder-empty');
+    for (const session of shown) {
+      if (!rec.panes.has(session.app)) {
+        const pane = createPane(session.app);
+        rec.panes.set(session.app, pane);
+        grid.appendChild(pane.root);
+      }
+    }
+    // the layout settles before any pane decides whether it sits at the bottom
+    grid.dataset.n = String(Math.min(rec.panes.size, REC_MAX_PANES));
+    fitRecorderGrid();
+    for (const session of shown) syncPane(rec.panes.get(session.app), session);
+    if (empty) {
+      const on = rec.status && rec.status.recording;
+      empty.hidden = rec.panes.size > 0;
+      empty.textContent = sessions.length
+        ? 'Every session is hidden. Pick one in the bar above.'
+        : on
+          ? 'Recording. Nothing has gone through the hub yet.'
+          : 'Nothing recorded. Press start, then use an app.';
+    }
+    fitRecorderGrid();
+  }
+
+  function fitRecorderGrid() {
+    const grid = document.getElementById('recorder-grid');
+    if (!grid || !grid.offsetParent) return;
+    if (document.body.classList.contains('rec-focus') || window.innerWidth <= 900) {
+      grid.style.height = '';
+      keepStuckPanesAtBottom();
+      return;
+    }
+    const top = grid.getBoundingClientRect().top + window.scrollY;
+    grid.style.height = `${Math.max(360, window.innerHeight - top - 20)}px`;
+    keepStuckPanesAtBottom();
+  }
+
+  function renderRecorderHeader() {
+    const data = rec.status || {};
     const stateEl = document.getElementById('recorder-state');
     const metaEl = document.getElementById('recorder-meta');
     const toggle = document.getElementById('recorder-toggle');
-    const list = document.getElementById('recorder-list');
-    if (!list) return;
-
     const on = !!data.recording;
     if (stateEl) {
-      stateEl.textContent = on ? `recording · ${Math.ceil(data.seconds_left / 60)} min left` : 'off';
-      stateEl.style.color = on ? 'var(--status-ready)' : '';
+      stateEl.textContent = on ? `recording · ${Math.ceil((data.seconds_left || 0) / 60)} min left` : 'off';
+      stateEl.classList.toggle('rec-on', on);
+      stateEl.dataset.on = on ? '1' : '';
     }
     if (toggle) toggle.textContent = on ? 'Stop recording' : 'Start recording';
-    if (metaEl) {
-      const bits = [`${formatNumber(data.count)} of ${formatNumber(data.max_entries)} kept`];
+    if (metaEl && data.max_entries) {
+      const bits = [`${formatNumber(data.count)} of ${formatNumber(data.max_entries)} attempts kept`];
       if (data.dropped) bits.push(`${formatNumber(data.dropped)} dropped`);
       metaEl.textContent = bits.join(' · ');
     }
+  }
 
-    const rows = data.entries || [];
-    if (!rows.length) {
-      list.innerHTML = `<div class="text-muted" style="padding:2rem; text-align:center">${
-        on ? 'Recording. Nothing has gone through the hub yet.' : 'Nothing recorded. Press start, then use an app.'
-      }</div>`;
+  function renderRecorderView() {
+    const sessions = sessionsOf();
+    adoptNewSessions(sessions);
+    renderSessionBar(sessions);
+    renderPanes(sessions);
+  }
+
+  function resetRecorderView() {
+    rec.rev = null;
+    rec.entries.clear();
+    rec.expanded.clear();
+    for (const pane of rec.panes.values()) pane.root.remove();
+    rec.panes.clear();
+  }
+
+  function onRecorderClick(event) {
+    const more = event.target.closest('.rec-more');
+    if (more) {
+      const key = more.dataset.key;
+      const text = more.parentElement.querySelector('.rec-text');
+      const open = !rec.expanded.has(key);
+      if (open) rec.expanded.add(key);
+      else rec.expanded.delete(key);
+      text.classList.toggle('clamped', !open);
+      more.textContent = open ? 'Show less' : `Show all · ${formatNumber(text.textContent.length)} chars`;
       return;
     }
-    list.innerHTML = rows.map(recorderRow).join('');
+    const fold = event.target.closest('.rec-fold');
+    if (fold) {
+      const key = fold.dataset.key;
+      if (rec.expanded.has(key)) rec.expanded.delete(key);
+      else rec.expanded.add(key);
+      const node = fold.closest('.rec-req');
+      const pane = rec.panes.get(fold.closest('.rec-pane').dataset.app);
+      const session = sessionsOf().find((s) => s.app === pane.app);
+      const id = Number(node.dataset.req);
+      if (!session || !session.requests.has(id)) return;
+      node.querySelector('.rec-prompt').outerHTML = promptBubble(session, id, session.requests.get(id)[0]);
+    }
+  }
+
+  function tickWaits() {
+    const now = Date.now();
+    document.querySelectorAll('#recorder-grid .rec-wait').forEach((el) => {
+      const since = new Date(el.dataset.since).getTime();
+      if (!isNaN(since)) el.textContent = `waiting ${secondsOf(Math.max(0, now - since)).replace(/\.\d s$/, ' s')}`;
+    });
   }
 
   async function loadRecorder() {
+    if (rec.loading) return;
+    rec.loading = true;
     try {
-      const res = await api('api/recorder');
+      const url = rec.rev === null ? 'api/recorder' : `api/recorder?since=${rec.rev}`;
+      const res = await api(url);
       if (res.status === 401) {
-        document.getElementById('recorder-list').innerHTML =
-          '<div class="text-muted" style="padding:2rem; text-align:center">This tab needs the token. Set it in the top bar.</div>';
+        resetRecorderView();
+        const empty = document.getElementById('recorder-empty');
+        if (empty) {
+          empty.hidden = false;
+          empty.textContent = 'This tab needs the token. Set it in the top bar.';
+        }
+        scheduleRecorderPoll(false);
         return;
       }
-      if (!res.ok) return;
+      if (!res.ok) {
+        scheduleRecorderPoll(state.activeTab === 'recorder');
+        return;
+      }
       const data = await res.json();
-      renderRecorder(data);
-      scheduleRecorderPoll(data.recording && state.activeTab === 'recorder');
+      if (data.started_at !== rec.startedAt) {
+        // a new run cleared the buffer; what is on screen belongs to the old one
+        const partial = rec.rev !== null;
+        resetRecorderView();
+        rec.startedAt = data.started_at;
+        if (partial) {
+          rec.rev = null;
+          rec.loading = false;
+          return loadRecorder();
+        }
+      }
+      for (const row of data.entries || []) rec.entries.set(row.id, row);
+      if (data.first_id != null) {
+        for (const id of rec.entries.keys()) if (id < data.first_id) rec.entries.delete(id);
+      } else if (!data.count) {
+        rec.entries.clear();
+      }
+      rec.rev = data.rev;
+      rec.status = data;
+      renderRecorderHeader();
+      renderRecorderView();
+      const open = [...rec.entries.values()].some((row) => REC_OPEN.includes(row.status));
+      scheduleRecorderPoll(state.activeTab === 'recorder' && (data.recording || open));
     } catch (e) {
       console.error('Error loading recorder:', e);
+      scheduleRecorderPoll(state.activeTab === 'recorder');
+    } finally {
+      rec.loading = false;
     }
   }
 
@@ -370,12 +865,16 @@
       clearTimeout(recorderTimer);
       recorderTimer = null;
     }
-    if (keepGoing) recorderTimer = setTimeout(loadRecorder, 2000);
+    if (keepGoing) recorderTimer = setTimeout(loadRecorder, REC_POLL_MS);
+    if (keepGoing && !rec.ticker) rec.ticker = setInterval(tickWaits, 1000);
+    if (!keepGoing && rec.ticker) {
+      clearInterval(rec.ticker);
+      rec.ticker = null;
+    }
   }
 
   async function toggleRecorder() {
-    const stateEl = document.getElementById('recorder-state');
-    const on = stateEl && stateEl.textContent.startsWith('recording');
+    const on = !!(rec.status && rec.status.recording);
     const minutes = parseInt(document.getElementById('recorder-minutes')?.value || '20', 10);
     const res = on
       ? await api('api/recorder/stop', { method: 'POST' })
@@ -390,6 +889,27 @@
     }
     notify(on ? 'Recording stopped' : `Recording for ${minutes} min`, 'success');
     loadRecorder();
+  }
+
+  function toggleRecorderFocus(force) {
+    const on = typeof force === 'boolean' ? force : !document.body.classList.contains('rec-focus');
+    document.body.classList.toggle('rec-focus', on);
+    const btn = document.getElementById('recorder-focus');
+    if (btn) btn.textContent = on ? 'Exit full screen' : 'Full screen';
+    fitRecorderGrid();
+  }
+
+  function setupRecorder() {
+    document.getElementById('recorder-toggle')?.addEventListener('click', toggleRecorder);
+    document.getElementById('recorder-focus')?.addEventListener('click', () => toggleRecorderFocus());
+    document.getElementById('recorder-sessions')?.addEventListener('click', (event) => {
+      const chip = event.target.closest('.rec-chip');
+      if (chip) toggleSession(chip.dataset.app);
+    });
+    window.addEventListener('resize', fitRecorderGrid);
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && document.body.classList.contains('rec-focus')) toggleRecorderFocus(false);
+    });
   }
 
   async function loadStatus() {
@@ -588,8 +1108,15 @@
     if (tabId === 'accounts') renderAccounts();
     if (tabId === 'promos') loadPromos();
     if (tabId === 'events') loadEvents();
-    if (tabId === 'recorder') loadRecorder();
-    if (tabId !== 'recorder') scheduleRecorderPoll(false);
+    document.body.classList.toggle('rec-wide', tabId === 'recorder');
+    if (tabId === 'recorder') {
+      loadRecorder();
+      fitRecorderGrid();
+    }
+    if (tabId !== 'recorder') {
+      scheduleRecorderPoll(false);
+      toggleRecorderFocus(false);
+    }
   }
   window.switchTab = switchTab;
 
@@ -2274,7 +2801,7 @@
     });
 
     // Theme toggle
-    document.getElementById('recorder-toggle')?.addEventListener('click', toggleRecorder);
+    setupRecorder();
 
     document.getElementById('theme-toggle')?.addEventListener('click', toggleTheme);
 

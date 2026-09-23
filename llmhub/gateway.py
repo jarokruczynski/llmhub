@@ -17,7 +17,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from .auth import require_token
 from .config import CLI_KIND, Entry
 from .quota import estimate_request_cost
-from .recorder import note_call, note_failure
+from .recorder import begin_call, note_call, note_failure, note_stream_end
 from .router import (
     ABANDONED_STATUS,
     CANCEL_BY_OWNER,
@@ -387,6 +387,11 @@ def _scan_sse_line(line: bytes, state: dict[str, Any]) -> None:
         content = delta.get("content")
         if isinstance(content, str):
             state["chars"] += len(content)
+            if "text" in state:
+                state["text"].append(content)
+        reasoning = delta.get("reasoning") or delta.get("reasoning_content")
+        if isinstance(reasoning, str) and "reasoning" in state:
+            state["reasoning"].append(reasoning)
 
 
 # the per (account, model) semaphore is released when router.run returns, so a stream still being
@@ -395,6 +400,11 @@ def _scan_sse_line(line: bytes, state: dict[str, Any]) -> None:
 # the stream is closed.
 async def stream_body(hub: Hub, call: StreamCall, call_id: int = 0) -> AsyncIterator[bytes]:
     state: dict[str, Any] = {"usage": None, "chars": 0}
+    recorded = call.extra.get("recorder_entry")
+    if recorded is not None:
+        # only while someone is watching: a stream nobody records is not kept in memory
+        state["text"] = []
+        state["reasoning"] = []
     buffer = b""
     try:
         async for chunk in call.response.aiter_bytes():
@@ -409,6 +419,10 @@ async def stream_body(hub: Hub, call: StreamCall, call_id: int = 0) -> AsyncIter
         await call.response.aclose()
         latency_ms = int((time.perf_counter() - call.started) * 1000)
         tokens = parse_usage(state["usage"] or {})
+        if recorded is not None:
+            note_stream_end(
+                hub, recorded, "".join(state["text"]), "".join(state["reasoning"]), state["usage"], latency_ms
+            )
         if tokens:
             hub.store.update_usage_tokens(call.usage_id, **tokens, latency_ms=latency_ms)
         else:
@@ -598,15 +612,19 @@ async def execute_chat(
         raise NoCandidatesError("no eligible model with quota", selection.rejected, selection.constraints)
 
     call_kind = kind or ("stream" if stream else "sync")
+    recorder = getattr(hub, "recorder", None)
+    request_id = recorder.next_request() if recorder is not None else None
 
     async def call(entry: Entry, attempt_no: int) -> Any:
+        # opened before the call, so the console shows the prompt while the model is thinking
+        opened = begin_call(hub, entry, body, app, call_kind, request_id=request_id, attempt=attempt_no)
         try:
             result = await call_model(hub, entry, body, app, attempt_no, stream=stream)
-        except Exception as exc:
+        except (Exception, asyncio.CancelledError) as exc:
             # a refused attempt never reaches the line below: it raises out of the backend
-            note_failure(hub, entry, body, app, call_kind, exc)
+            note_failure(hub, entry, body, app, call_kind, exc, opened=opened)
             raise
-        note_call(hub, entry, body, app, call_kind, result)
+        note_call(hub, entry, body, app, call_kind, result, opened=opened)
         return result
 
     # a job has nobody waiting on the socket, so it walks the whole pool; a sync or stream

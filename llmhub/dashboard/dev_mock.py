@@ -4,17 +4,22 @@ import argparse
 import random
 import re
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from llmhub.api import REJECT_REASON_MIN, REJECT_REASON_REQUIRED
 from llmhub.dashboard.routes import router
+from llmhub.recorder import Recorder
 
 REQUIRE_TOKEN: str | None = None
+# a missing body reads as an empty one, the way the real endpoints treat it
+JsonBody = Annotated[dict[str, Any], Body(default_factory=dict)]
+OptionalJsonBody = Annotated[dict[str, Any] | None, Body()]
 SCOUT_SOURCES_COUNT = 5
 SCOUT_RUN_SECONDS = 7.0
 
@@ -1682,6 +1687,160 @@ def _app_shares() -> dict[str, dict[str, Any]]:
     }
 
 
+# --- prompt recorder: the real in-memory recorder, fed by a thread that plays a few apps ---
+RECORDER = Recorder()
+RECORDER_LOCK = threading.Lock()
+_REC_SYSTEM = {
+    "detektor": "You extract structured facts from meeting transcripts. Answer with JSON only.",
+    "chat-bot": "You are a helpful assistant. Keep answers short.",
+    "warehouse": "Classify each SKU description into one of: food, tools, garden, other.",
+    "scout": "Summarise the provider page and list any free tier limits.",
+    "notes": "Rewrite the note in plain English.",
+}
+_REC_MODELS = ["explabs/gpt-6-astra", "groq/llama-4-scout", "cerebras/qwen-3-235b", "gemini/flash-2.5"]
+_REC_CHAT: dict[str, list[dict[str, str]]] = {}
+
+
+def _rec_body(app: str, turn: int) -> dict[str, Any]:
+    if app == "chat-bot":
+        history = _REC_CHAT.setdefault(app, [{"role": "system", "content": _REC_SYSTEM[app]}])
+        history.append(
+            {
+                "role": "user",
+                "content": random.choice(
+                    [
+                        "What is the capital of Portugal?",
+                        "And how many people live there?",
+                        "Give me three things to see there, one line each.",
+                        "Which of them is free?",
+                        "Thanks. Now a haiku about it.",
+                    ]
+                ),
+            }
+        )
+        return {"model": "auto", "messages": [dict(m) for m in history]}
+    if app == "detektor":
+        transcript = "\n".join(
+            f"[{i:02d}:{random.randint(10, 59)}] Speaker {random.choice('ABC')}: "
+            + random.choice(
+                [
+                    "we should ship on friday",
+                    "the budget is not approved",
+                    "who owns the rollout?",
+                    "let us move the demo",
+                    "the vendor quota ran out again",
+                ]
+            )
+            for i in range(random.randint(8, 60))
+        )
+        return {
+            "model": "auto",
+            "messages": [
+                {"role": "system", "content": _REC_SYSTEM[app]},
+                {
+                    "role": "user",
+                    "content": f"Transcript {turn}:\n{transcript}\n\nReturn decisions and owners.",
+                },
+            ],
+        }
+    return {
+        "model": random.choice(["auto", "fast", "vision"]),
+        "messages": [
+            {"role": "system", "content": _REC_SYSTEM[app]},
+            {
+                "role": "user",
+                "content": f"Item {turn}: "
+                + random.choice(
+                    [
+                        "Cordless drill 18V with two batteries",
+                        "Organic basil seeds, 2g pack",
+                        "https://example.test/pricing - read the free tier",
+                        "meeting moved to thu, tell ana",
+                    ]
+                ),
+            },
+        ],
+    }
+
+
+def _rec_answer(app: str, body: dict[str, Any]) -> str:
+    if app == "detektor":
+        return '{"decisions": ["ship on friday"], "owners": {"rollout": "Speaker B"}}'
+    if app == "chat-bot":
+        last = body["messages"][-1]["content"]
+        return f"Answer to: {last}\n" + ("Lisbon. " * random.randint(1, 40)).strip()
+    return random.choice(
+        ["garden", "tools", "Free tier: 30 req/min, 1M tokens/day.", "Meeting moved to Thursday."]
+    )
+
+
+def _rec_play_one(app: str, turn: int) -> None:
+    body = _rec_body(app, turn)
+    kind = "stream" if app == "chat-bot" else random.choice(["sync", "sync", "job"])
+    request_id = RECORDER.next_request()
+    models = random.sample(_REC_MODELS, k=len(_REC_MODELS))
+    attempts = 1 + (random.random() < 0.25) + (random.random() < 0.1)
+    for attempt in range(1, attempts + 1):
+        with RECORDER_LOCK:
+            entry = RECORDER.begin(
+                app=app,
+                model_request=str(body["model"]),
+                entry_key=models[attempt - 1],
+                account=models[attempt - 1].split("/")[0] + "-main",
+                kind=kind,
+                body=body,
+                request_id=request_id,
+                attempt=attempt,
+            )
+        if entry is None:
+            return
+        wait = random.uniform(0.4, 9.0)
+        if kind == "stream":
+            time.sleep(min(wait, 1.0))
+            with RECORDER_LOCK:
+                RECORDER.streaming(entry, int(min(wait, 1.0) * 1000))
+            time.sleep(wait)
+        else:
+            time.sleep(wait)
+        with RECORDER_LOCK:
+            if attempt < attempts:
+                RECORDER.finish(
+                    entry,
+                    status="quota 429",
+                    answer="quota: 429\ninsufficient_quota: You exceeded your current quota",
+                )
+                continue
+            answer = _rec_answer(app, body)
+            chars = sum(len(m["content"]) for m in body["messages"])
+            RECORDER.finish(
+                entry,
+                status="ok",
+                answer=answer,
+                reasoning="Thinking about the request first." if random.random() < 0.2 else "",
+                tokens={
+                    "in": chars // 4,
+                    "out": len(answer) // 4,
+                    "total": (chars + len(answer)) // 4,
+                    "cached": random.choice([0, 0, 512]),
+                    "reasoning": 0,
+                },
+            )
+            if app == "chat-bot":
+                _REC_CHAT[app].append({"role": "assistant", "content": answer})
+
+
+def _rec_player() -> None:
+    turn = 0
+    while True:
+        time.sleep(random.uniform(0.8, 3.0))
+        if not RECORDER.recording():
+            _REC_CHAT.clear()
+            continue
+        turn += 1
+        app = random.choice(list(_REC_SYSTEM))
+        threading.Thread(target=_rec_play_one, args=(app, turn), daemon=True).start()
+
+
 def create_hub_app() -> FastAPI:
     app = FastAPI(title="llmhub dev mock", docs_url=None, redoc_url=None)
 
@@ -1714,6 +1873,25 @@ def create_hub_app() -> FastAPI:
             },
             "accounts": _account_rows(),
         }
+
+    @app.post("/api/recorder/start")
+    def recorder_start(request: Request, payload: OptionalJsonBody = None) -> dict[str, Any]:
+        _require_token(request)
+        minutes = int((payload or {}).get("minutes") or 20)
+        with RECORDER_LOCK:
+            return RECORDER.start(minutes)
+
+    @app.post("/api/recorder/stop")
+    def recorder_stop(request: Request) -> dict[str, Any]:
+        _require_token(request)
+        with RECORDER_LOCK:
+            return RECORDER.stop()
+
+    @app.get("/api/recorder")
+    def recorder_dump(request: Request, since: int | None = None) -> dict[str, Any]:
+        _require_token(request)
+        with RECORDER_LOCK:
+            return RECORDER.dump(since=since)
 
     @app.get("/api/live")
     def live(window_min: int = LIVE_WINDOW_MIN) -> dict[str, Any]:
@@ -1900,7 +2078,7 @@ def create_hub_app() -> FastAPI:
         return {"promos": STATE["promos"]}
 
     @app.post("/api/promos")
-    def add_promo(request: Request, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    def add_promo(request: Request, payload: JsonBody) -> dict[str, Any]:
         _require_token(request)
         row = {
             "id": STATE["next_promo_id"],
@@ -1940,9 +2118,7 @@ def create_hub_app() -> FastAPI:
         return row
 
     @app.patch("/api/promos/{promo_id}")
-    def patch_promo(
-        promo_id: int, request: Request, payload: dict[str, Any] = Body(default={})
-    ) -> dict[str, Any]:
+    def patch_promo(promo_id: int, request: Request, payload: JsonBody) -> dict[str, Any]:
         _require_token(request)
         row = _find_promo(promo_id)
         if payload.get("status") == "rejected":
@@ -1957,9 +2133,7 @@ def create_hub_app() -> FastAPI:
         return row
 
     @app.post("/api/promos/{promo_id}/reject")
-    def reject_promo(
-        promo_id: int, request: Request, payload: dict[str, Any] = Body(default={})
-    ) -> dict[str, Any]:
+    def reject_promo(promo_id: int, request: Request, payload: JsonBody) -> dict[str, Any]:
         _require_token(request)
         reason = str(payload.get("reason") or "").strip()
         if len(reason) < REJECT_REASON_MIN:
@@ -2089,7 +2263,7 @@ def create_hub_app() -> FastAPI:
         return {"providers": KNOWN_PROVIDERS}
 
     @app.post("/api/accounts")
-    def add_account(request: Request, payload: dict[str, Any] = Body(default={})) -> dict[str, Any]:
+    def add_account(request: Request, payload: JsonBody) -> dict[str, Any]:
         _require_token(request)
         provider = str(payload.get("provider") or "").strip()
         account_id = str(payload.get("account_id") or "").strip()
@@ -2188,7 +2362,7 @@ def create_hub_app() -> FastAPI:
         return out
 
     @app.post("/api/accounts/quick")
-    def add_account_quick(request: Request, payload: dict[str, Any] = Body(default={})) -> Any:
+    def add_account_quick(request: Request, payload: JsonBody) -> Any:
         _require_token(request)
         api_key = str(payload.get("api_key") or "").strip()
         if not api_key:
@@ -2399,9 +2573,7 @@ def create_hub_app() -> FastAPI:
         return out
 
     @app.post("/api/accounts/{provider}/{account_id}/models")
-    def add_models(
-        provider: str, account_id: str, request: Request, payload: dict[str, Any] = Body(default={})
-    ) -> dict[str, Any]:
+    def add_models(provider: str, account_id: str, request: Request, payload: JsonBody) -> dict[str, Any]:
         _require_token(request)
         prov, _acc = _registry_account(provider, account_id)
         added = []
@@ -2441,9 +2613,7 @@ def create_hub_app() -> FastAPI:
         return out
 
     @app.put("/api/accounts/{provider}/{account_id}/key")
-    def rotate_key(
-        provider: str, account_id: str, request: Request, payload: dict[str, Any] = Body(default={})
-    ) -> dict[str, Any]:
+    def rotate_key(provider: str, account_id: str, request: Request, payload: JsonBody) -> dict[str, Any]:
         _require_token(request)
         _prov, acc = _registry_account(provider, account_id)
         if not payload.get("api_key"):
@@ -2486,9 +2656,7 @@ def create_hub_app() -> FastAPI:
         }
 
     @app.post("/api/accounts/{provider}/{account_id}/test")
-    def test_account(
-        provider: str, account_id: str, request: Request, payload: dict[str, Any] = Body(default={})
-    ) -> dict[str, Any]:
+    def test_account(provider: str, account_id: str, request: Request, payload: JsonBody) -> dict[str, Any]:
         _require_token(request)
         prov, _acc = _registry_account(provider, account_id)
         models = prov.get("models") or []
@@ -2543,9 +2711,7 @@ def create_hub_app() -> FastAPI:
         return out
 
     @app.post("/api/providers/{provider}/discover")
-    def discover(
-        provider: str, request: Request, payload: dict[str, Any] = Body(default={})
-    ) -> dict[str, Any]:
+    def discover(provider: str, request: Request, payload: JsonBody) -> dict[str, Any]:
         _require_token(request)
         account_id = str(payload.get("account_id") or "")
         prov = STATE["registry"].get(provider)
@@ -2590,6 +2756,7 @@ def create_app() -> FastAPI:
     _seed_jobs()
     _seed_registry()
     _seed_scout()
+    threading.Thread(target=_rec_player, daemon=True).start()
     hub = create_hub_app()
     root = FastAPI(title="llmhub dev mock root", docs_url=None, redoc_url=None)
     root.mount("/hub", hub)

@@ -456,33 +456,25 @@
     </section>
 
     <!-- TAB 10: RECORDER -->
-    <section class="panel" data-panel="recorder">
-      <div class="section-card">
-        <div class="section-header">
-          <span class="section-title">Prompt Recorder</span>
-          <span class="text-muted" style="font-size:0.8rem" id="recorder-state">off</span>
-        </div>
+    <section class="panel rec-panel" data-panel="recorder">
+      <div class="rec-toolbar">
+        <span class="section-title">Prompt Recorder</span>
+        <span class="rec-state" id="recorder-state">off</span>
+        <button type="button" class="btn btn-primary btn-sm" id="recorder-toggle">Start recording</button>
+        <select class="select" id="recorder-minutes" title="Recording window">
+          <option value="5">5 min</option>
+          <option value="20" selected>20 min</option>
+          <option value="60">60 min</option>
+        </select>
+        <span class="text-muted rec-meta" id="recorder-meta"></span>
+        <span class="rec-info text-muted" title="What each app actually sent and what came back. Off unless you turn it on, kept in memory only, cleared every time you start it, and gone when the hub restarts. Reading this tab needs the token from another device, unlike the rest of the console.">memory only · cleared on start · ⓘ</span>
+        <button type="button" class="btn btn-sm rec-focus-btn" id="recorder-focus" title="Hide the console chrome (Esc to leave)">Full screen</button>
+      </div>
 
-        <p class="text-secondary" style="font-size:0.85rem; margin:0 0 1rem">
-          What each app actually sent and what came back. Off unless you turn it on, kept in memory
-          only, cleared every time you start it, and gone when the hub restarts. Reading this tab
-          needs the token from another device, unlike the rest of the console.
-        </p>
+      <div class="rec-sessions" id="recorder-sessions" aria-label="Sessions"></div>
 
-        <div style="display:flex; gap:0.75rem; align-items:center; flex-wrap:wrap; margin-bottom:1rem">
-          <button type="button" class="btn btn-primary" id="recorder-toggle">Start recording</button>
-          <div style="display:flex; gap:0.4rem; align-items:center">
-            <span class="text-muted" style="font-size:0.8rem">Window:</span>
-            <select class="select" id="recorder-minutes" style="font-size:0.8rem">
-              <option value="5">5 min</option>
-              <option value="20" selected>20 min</option>
-              <option value="60">60 min</option>
-            </select>
-          </div>
-          <span class="text-muted" style="font-size:0.8rem" id="recorder-meta"></span>
-        </div>
-
-        <div id="recorder-list"></div>
+      <div class="rec-grid" id="recorder-grid" data-n="0">
+        <div class="rec-empty text-muted" id="recorder-empty">Nothing recorded. Press start, then use an app.</div>
       </div>
     </section>
 

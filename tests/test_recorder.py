@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import httpx
+import respx
 
 from llmhub.recorder import MAX_CHARS, MAX_ENTRIES, Recorder
 
@@ -184,3 +185,128 @@ def test_a_refusal_is_ignored_while_the_recorder_is_off() -> None:
     note_failure(hub, FakeEntry(), BODY, "app-a", "sync", FakeUpstream())
 
     assert hub.recorder.dump()["entries"] == []
+
+
+def test_an_attempt_is_visible_while_the_model_is_still_thinking() -> None:
+    rec = Recorder()
+    rec.start(20)
+
+    opened = rec.begin(
+        app="app-a", model_request="auto", entry_key="alpha/m1", account="alpha-1", kind="sync", body=BODY
+    )
+
+    assert opened is not None
+    pending = rec.dump()["entries"][0]
+    assert pending["status"] == "pending"
+    assert pending["ts"] is None
+    assert pending["messages"] == [{"role": "user", "text": "say ok"}]
+
+    rec.finish(opened, status="ok", answer="ok", latency_ms=40, tokens={"in": 3, "out": 1, "total": 4})
+
+    done = rec.dump()["entries"][0]
+    assert done["status"] == "ok"
+    assert done["ts"] is not None
+    assert done["latency_ms"] == 40
+    assert done["tokens"]["out"] == 1
+
+
+def test_a_poll_with_since_returns_only_what_changed() -> None:
+    rec = Recorder()
+    rec.start(20)
+    note(rec, content="first")
+    seen = rec.status()["rev"]
+
+    assert rec.dump(since=seen)["entries"] == []
+
+    note(rec, content="second")
+
+    changed = rec.dump(since=seen)["entries"]
+    assert [row["messages"][0]["text"] for row in changed] == ["second"]
+
+
+def test_usage_comes_from_the_vendor_and_is_estimated_without_it() -> None:
+    rec = Recorder()
+    rec.start(20)
+    rec.note(
+        app="app-a",
+        model_request="auto",
+        entry_key="alpha/m1",
+        account="alpha-1",
+        kind="sync",
+        body=BODY,
+        payload={**ANSWER, "usage": {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16}},
+        status="ok",
+        latency_ms=12,
+    )
+    note(rec)
+
+    estimated, billed = rec.dump()["entries"]
+    assert billed["tokens"] == {"in": 11, "out": 5, "total": 16, "cached": 0, "reasoning": 0}
+    assert estimated["tokens"]["estimated"] is True
+
+
+def test_a_long_message_keeps_its_head_and_its_tail() -> None:
+    rec = Recorder()
+    rec.start(20)
+
+    note(rec, content="HEAD" + "x" * (MAX_CHARS * 2) + "TAIL")
+
+    text = rec.dump()["entries"][0]["messages"][0]["text"]
+    assert text.startswith("HEAD")
+    assert text.endswith("TAIL")
+
+
+ALPHA_URL = "https://alpha.test/v1/chat/completions"
+BETA_URL = "https://beta.test/v1/chat/completions"
+CHAT = {**BODY, "max_tokens": 64}
+OK_PAYLOAD = {
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 11, "completion_tokens": 5, "total_tokens": 16},
+}
+
+
+@respx.mock
+async def test_a_fallback_reads_as_one_request_with_several_answers(client: httpx.AsyncClient, hub) -> None:
+    respx.post(ALPHA_URL).mock(
+        return_value=httpx.Response(
+            429, json={"error": {"code": "insufficient_quota", "message": "no quota"}}
+        )
+    )
+    respx.post(BETA_URL).mock(return_value=httpx.Response(200, json=OK_PAYLOAD))
+    hub.recorder.start(5)
+
+    response = await client.post("/v1/chat/completions", json=CHAT, headers={"X-Hub-App": "app-a"})
+
+    assert response.status_code == 200
+    rows = list(reversed(hub.recorder.dump()["entries"]))
+    assert len({row["request_id"] for row in rows}) == 1
+    assert [row["attempt"] for row in rows] == [1, 2, 3]
+    assert [row["status"].split()[0] for row in rows] == ["quota", "quota", "ok"]
+    assert rows[-1]["answer"] == "hi"
+    assert rows[-1]["tokens"]["in"] == 11
+
+
+@respx.mock
+async def test_a_streamed_answer_is_recorded_once_the_stream_ends(client: httpx.AsyncClient, hub) -> None:
+    sse = (
+        b'data: {"id":"1","choices":[{"delta":{"content":"he"},"index":0}]}\n\n'
+        b'data: {"id":"1","choices":[{"delta":{"content":"llo"},"index":0}]}\n\n'
+        b'data: {"id":"1","choices":[],"usage":{"prompt_tokens":7,"completion_tokens":3,"total_tokens":10}}\n\n'
+        b"data: [DONE]\n\n"
+    )
+    respx.post(ALPHA_URL).mock(
+        return_value=httpx.Response(200, content=sse, headers={"content-type": "text/event-stream"})
+    )
+    hub.recorder.start(5)
+
+    async with client.stream(
+        "POST", "/v1/chat/completions", json=dict(CHAT, stream=True), headers={"X-Hub-App": "app-a"}
+    ) as response:
+        async for _ in response.aiter_bytes():
+            pass
+
+    row = hub.recorder.dump()["entries"][0]
+    assert row["status"] == "ok"
+    assert row["answer"] == "hello"
+    assert row["tokens"]["out"] == 3
+    assert row["first_ms"] is not None

@@ -1315,8 +1315,9 @@ six hours.
 Prompts here are other projects' payloads - transcripts, warehouse rows - and at the observed
 call rate (87k calls in a day, 23.6 KB average, 464 KB largest) storing them would be gigabytes
 a day, which is the failure this hub already had once. So the log is a bounded deque in memory:
-armed by hand, cleared on every start, capped at 200 entries and 4000 characters a side, and
-gone when the process restarts.
+armed by hand, cleared on every start, capped at 200 attempts, 6000 characters a message (head
+and tail kept, since the instruction is as often at the end as at the start) and 24000 a prompt
+(the newest messages kept), and gone when the process restarts.
 
 The window is the other half of the bound. `POST api/recorder/start` arms it for a number of
 minutes (20 by default, 120 the ceiling) and `recording` goes false on its own when the window
@@ -1327,6 +1328,34 @@ The hook is the inner `call` in `execute_chat`, which is the one place that sees
 body, the candidate it was sent to and the result, for HTTP, streaming and CLI backends alike.
 It is a no-op when the recorder is off and it swallows its own errors: a debugging aid that can
 break a served request is worse than no aid.
+
+An entry is one attempt, opened by `begin_call` before the vendor is called (`status: pending`)
+and closed by `note_call`, `note_failure` or, for a stream, `note_stream_end` once the last chunk
+has gone to the caller. Opening early is what lets the console show a prompt while the model is
+still thinking, with a running timer. A cancelled attempt is closed as `cancelled`; without that
+it would read as waiting forever. Attempts of one request share a `request_id` taken in
+`execute_chat`, so a fallback reads as one prompt with its refusals and its answer under it.
+A stream's text is only buffered when its attempt is being recorded (`recorder_entry` in
+`StreamCall.extra`); a stream nobody watches costs nothing extra.
+
+Each entry carries `sent_at`, `ts` (answered), `latency_ms`, `first_ms` (headers back, for a
+stream) and `tokens` as the vendor billed them (`in`, `out`, `cached`, `reasoning`), or a
+chars/4 estimate flagged `estimated` when the vendor said nothing.
+
+Every change bumps a recorder-wide `rev`, and `GET api/recorder?since=<rev>` returns only the
+entries opened or changed after it. The console polls that way and never redraws what it
+already shows: it appends new requests and replaces only the answers of a request still in
+flight. The first version redrew the whole list every two seconds, which threw every scroll
+position back to the top - the recorder was unreadable exactly when there was something to read.
+`first_id` tells the console which entries the ring has pushed out.
+
+The tab groups entries by app into sessions, one chat pane each: one pane fills the screen, two
+split it, three or four share a 2x2 grid, and a bar lists every session with a toggle. Four is
+the ceiling; turning on a fifth hides the one shown longest. Apps resend the whole conversation
+on every call, so each request folds away the messages an earlier request of the same session
+already showed (and the answers the pane already shows under their own request). A pane follows
+the newest message until the reader scrolls up, then counts what arrived below instead of
+moving.
 
 Both outcomes are recorded. A refused attempt raises out of the backend rather than returning,
 so hooking only the success path produced the one failure mode that matters here: a recorder
