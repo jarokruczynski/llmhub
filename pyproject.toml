@@ -30,7 +30,7 @@ dependencies = [
 
 [project.optional-dependencies]
 # better html -> text for the scout; without it collect falls back to a built-in tag stripper
-scout = ["trafilatura>=1.12"]
+scout = ["trafilatura>=2.2.0"]
 
 [project.urls]
 Homepage = "https://github.com/jarokruczynski/llmhub"
