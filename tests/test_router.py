@@ -424,7 +424,10 @@ async def test_run_parks_groq_tpd_quota_for_the_full_retry_hint(hub: Hub) -> Non
     until = hub.quota.exhausted_until(entry, datetime.now(UTC))
     assert until is not None
     hint = timedelta(minutes=27, seconds=44.063999999)
-    assert before + hint <= until <= after + hint
+    # the hint can only shorten the park: run in the last half hour of the UTC day, the daily
+    # window ends first and wins
+    window_end = window_bounds("daily", "UTC", before)[1]
+    assert min(before + hint, window_end) <= until <= min(after + hint, window_end)
 
 
 def mark_opt_in(hub: Hub, provider: str) -> None:
