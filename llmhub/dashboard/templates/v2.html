@@ -124,49 +124,81 @@
       <div class="playground-layout">
         <!-- Sidebar Config -->
         <div class="playground-sidebar">
+          <div class="pg-section-title">1. Who answers</div>
+
           <div class="form-group">
-            <label class="form-label" for="playground-model">Routing Target</label>
+            <label class="form-label" for="playground-model">Model or routing profile</label>
             <select class="select" id="playground-model">
               <!-- Populated by v2.js -->
             </select>
-            <span class="text-muted" style="font-size:0.72rem">Pick an alias (e.g. <code>auto</code>) or pin a specific model</span>
-          </div>
-
-          <div class="form-group">
-            <label class="form-label" for="playground-app">Client App ID (X-Hub-App)</label>
-            <input type="text" class="input font-mono" id="playground-app" value="studio-playground">
-          </div>
-
-          <div class="form-group">
-            <label class="form-label">Quick Prompt Presets</label>
-            <div class="presets-chips">
-              <span class="chip-preset" data-prompt="Say 'OK' and explain in one short sentence what you are.">Quick Ping</span>
-              <span class="chip-preset" data-prompt="Solve this puzzle: A farmer needs to cross a river with a wolf, a goat, and a cabbage. Step by step.">Reasoning</span>
-              <span class="chip-preset" data-prompt="Extract this into JSON { name: string, role: string, score: number }: 'Alice is a Senior AI Engineer rating 98/100'. Return only JSON.">Strict JSON</span>
-              <span class="chip-preset" data-prompt="Write a very short poem about open-source AI and free vendor tiers.">Creative</span>
+            <div class="form-help" id="playground-model-help">
+              A <b>profile</b> lets the hub pick a free model for you and fall back to the next one
+              when a vendor says no. A <b>specific model</b> is tried alone, with no fallback.
             </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="playground-temp">Temperature (0.0 - 2.0)</label>
-            <input type="number" class="input" id="playground-temp" min="0" max="2" step="0.1" value="0.7">
+            <label class="form-label" for="playground-app">App name for this test</label>
+            <input type="text" class="input font-mono" id="playground-app" value="studio-playground">
+            <div class="form-help">
+              Sent as <code>X-Hub-App</code>. It is the name these calls get in Usage, the live
+              feed and the Recorder, so your tests stay apart from real apps.
+            </div>
+          </div>
+
+          <div class="pg-section-title">2. What you ask</div>
+
+          <div class="form-group">
+            <label class="form-label">Example prompts</label>
+            <div class="presets-chips">
+              <span class="chip-preset" title="Is the route alive at all? The fastest check." data-prompt="Say 'OK' and explain in one short sentence what you are.">Is it alive?</span>
+              <span class="chip-preset" title="A multi-step puzzle: shows whether the model reasons step by step." data-prompt="Solve this puzzle: A farmer needs to cross a river with a wolf, a goat, and a cabbage. Step by step.">Step-by-step reasoning</span>
+              <span class="chip-preset" title="Asks for JSON only: shows whether the model keeps to a format." data-prompt="Extract this into JSON { name: string, role: string, score: number }: 'Alice is a Senior AI Engineer rating 98/100'. Return only JSON.">JSON only</span>
+              <span class="chip-preset" title="Free writing: shows the effect of the creativity setting." data-prompt="Write a very short poem about open-source AI and free vendor tiers.">Short poem</span>
+            </div>
+            <div class="form-help">Fills the message box. Nothing is sent until you press Send.</div>
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="playground-max-tokens">Max Tokens</label>
+            <label class="form-label" for="playground-system">Standing instructions <span class="form-optional">optional</span></label>
+            <textarea class="textarea" id="playground-system" rows="3" placeholder="e.g. You are a concise assistant. Answer in Polish."></textarea>
+            <div class="form-help">
+              The <i>system prompt</i>: sent ahead of your message every time. Use it for role, tone,
+              language or output format. Empty means the model's own default.
+            </div>
+          </div>
+
+          <div class="pg-section-title">3. How it answers</div>
+
+          <div class="form-group">
+            <label class="form-label" for="playground-temp">Creativity <span class="form-optional">temperature <b id="playground-temp-value">0.7</b></span></label>
+            <input type="range" class="pg-range" id="playground-temp" min="0" max="2" step="0.1" value="0.7">
+            <div class="pg-range-scale"><span>0 exact</span><span>0.7 balanced</span><span>2 wild</span></div>
+            <div class="form-help" id="playground-temp-help">
+              Low gives the same, most likely answer every time (good for facts, code, JSON).
+              High gives more varied wording and can drift off. Some models ignore it.
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label" for="playground-max-tokens">Answer length limit <span class="form-optional">max tokens</span></label>
             <input type="number" class="input" id="playground-max-tokens" min="1" max="8192" value="1024">
+            <div class="form-help" id="playground-max-tokens-help">
+              A token is about 4 characters of English, so 1024 is roughly 750 words. The answer
+              stops there even mid-sentence. Reasoning models spend part of it thinking. The hub
+              also skips models whose remaining quota cannot cover this much.
+            </div>
           </div>
 
           <div class="form-group">
-            <label class="form-label" for="playground-system">System Prompt (optional)</label>
-            <textarea class="textarea" id="playground-system" rows="3" placeholder="You are a helpful, concise AI assistant..."></textarea>
-          </div>
-
-          <div class="form-group">
-            <label style="display:flex; align-items:center; gap:0.5rem; font-size:0.85rem; cursor:pointer">
+            <label class="pg-check">
               <input type="checkbox" id="playground-stream-toggle" checked>
-              <span>Enable Real-time Streaming (SSE)</span>
+              <span>Show the answer as it is written <span class="form-optional">streaming</span></span>
             </label>
+            <div class="form-help">
+              On: text appears word by word and the time to the first word is measured. Off: the
+              whole answer arrives at once when it is done.
+            </div>
           </div>
         </div>
 
@@ -194,7 +226,7 @@
 
           <div class="chat-container" id="playground-chat">
             <div class="message-bubble message-assistant">
-              👋 <strong>LLMHub Playground ready.</strong> Select a routing alias or model, type a prompt below, and hit <em>Send</em> (or <kbd>Ctrl+Enter</kbd>).
+              👋 <strong>LLMHub Playground ready.</strong> Pick who answers on the left, type a message below, and press <em>Send</em> (or <kbd>Ctrl+Enter</kbd>). Above the chat you will see which model actually answered, how long it took and how many tokens it used.
             </div>
           </div>
 

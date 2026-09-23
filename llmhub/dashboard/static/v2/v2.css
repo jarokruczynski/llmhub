@@ -515,6 +515,73 @@ body {
   justify-content: space-between;
 }
 
+.form-help {
+  font-size: 0.74rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+.form-help b {
+  color: var(--text-secondary);
+}
+
+.form-optional {
+  font-weight: 400;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.pg-section-title {
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-primary);
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0.35rem;
+  margin-bottom: -0.5rem;
+}
+
+.pg-range {
+  width: 100%;
+  accent-color: var(--accent-primary);
+}
+
+.pg-range-scale {
+  position: relative;
+  height: 1.1em;
+  font-size: 0.68rem;
+  color: var(--text-muted);
+  margin-top: -0.2rem;
+}
+
+.pg-range-scale span {
+  position: absolute;
+  white-space: nowrap;
+}
+
+.pg-range-scale span:nth-child(1) {
+  left: 0;
+}
+
+/* 0.7 on a 0-2 scale */
+.pg-range-scale span:nth-child(2) {
+  left: 35%;
+  transform: translateX(-50%);
+}
+
+.pg-range-scale span:nth-child(3) {
+  right: 0;
+}
+
+.pg-check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
 .presets-chips {
   display: flex;
   flex-wrap: wrap;

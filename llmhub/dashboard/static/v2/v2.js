@@ -1501,6 +1501,7 @@
       const modelSelect = document.getElementById('playground-model');
       if (modelSelect) {
         modelSelect.value = key;
+        describePlaygroundTarget();
       }
       return;
     }
@@ -1846,28 +1847,80 @@
     const currentVal = select.value;
     select.innerHTML = '';
 
+    const aliases = getAliasesMap();
     const aliasGroup = document.createElement('optgroup');
-    aliasGroup.label = 'Aliases (Auto-Routed)';
-    Object.keys(getAliasesMap()).forEach(a => {
+    aliasGroup.label = 'Routing profiles - the hub picks a model, with fallback';
+    Object.entries(aliases).forEach(([name, cfg]) => {
       const opt = document.createElement('option');
-      opt.value = a;
-      opt.textContent = `${a} (alias)`;
+      opt.value = name;
+      const count = (cfg.prefer || []).length;
+      const needs = (cfg.require || []).length ? `needs ${cfg.require.join(', ')}` : 'any model';
+      opt.textContent = `${name}  -  ${count} preferred, ${needs}`;
       aliasGroup.appendChild(opt);
     });
     select.appendChild(aliasGroup);
 
+    // one option per model: accounts of the same model are one target to the router
+    const byKey = new Map();
+    for (const m of state.status.models || []) {
+      const seen = byKey.get(m.key);
+      if (!seen || (seen.status !== 'ok' && m.status === 'ok')) byKey.set(m.key, m);
+    }
+    const models = [...byKey.values()].sort((a, b) => (a.status === 'ok' ? 0 : 1) - (b.status === 'ok' ? 0 : 1) || a.key.localeCompare(b.key));
     const modelGroup = document.createElement('optgroup');
-    modelGroup.label = 'Registered Models (Pinned)';
-    const models = state.status.models || [];
+    modelGroup.label = 'One specific model - no fallback';
     models.forEach(m => {
       const opt = document.createElement('option');
       opt.value = m.key;
-      opt.textContent = `${m.key} [${m.status}]`;
+      opt.textContent = m.status === 'ok' ? m.key : `${m.key}  (${m.status})`;
       modelGroup.appendChild(opt);
     });
     select.appendChild(modelGroup);
 
     if (currentVal) select.value = currentVal;
+    describePlaygroundTarget();
+  }
+
+  // what the chosen target will actually do, in words
+  function describePlaygroundTarget() {
+    const select = document.getElementById('playground-model');
+    const help = document.getElementById('playground-model-help');
+    if (!select || !help || !state.status) return;
+    const target = select.value;
+    const alias = getAliasesMap()[target];
+    if (alias) {
+      const prefer = alias.prefer || [];
+      const first = prefer.slice(0, 3).map((k) => `<code>${escapeHtml(k)}</code>`).join(', ');
+      const more = prefer.length > 3 ? ` and ${prefer.length - 3} more` : '';
+      const needs = (alias.require || []).length
+        ? ` Only models that can do <b>${escapeHtml(alias.require.join(', '))}</b> are considered.`
+        : '';
+      const spread = alias.spread ? ` Traffic is spread over the first ${alias.spread} that are free.` : '';
+      help.innerHTML = `Profile <b>${escapeHtml(target)}</b>: the hub tries ${first || 'every model'}${more} in that order and falls back to the next one when a vendor refuses.${spread}${needs} The model that answered is shown above the chat.`;
+      return;
+    }
+    const rows = (state.status.models || []).filter((m) => m.key === target);
+    if (!rows.length) {
+      help.textContent = 'Pick a routing profile or a specific model.';
+      return;
+    }
+    const ready = rows.filter((m) => m.status === 'ok').length;
+    const accounts = rows.length > 1 ? ` on any of its ${rows.length} accounts` : '';
+    const state_ = ready ? `${ready} of ${rows.length} ready now.` : `<b>Not ready now</b> (${escapeHtml(rows.map((m) => m.status).join(', '))}): the call will most likely fail.`;
+    help.innerHTML = `Only <code>${escapeHtml(target)}</code>${accounts}, with no fallback to other models. ${state_}`;
+  }
+
+  function describePlaygroundSettings() {
+    const temp = document.getElementById('playground-temp');
+    const tempValue = document.getElementById('playground-temp-value');
+    if (temp && tempValue) tempValue.textContent = Number(temp.value).toFixed(1);
+    const max = document.getElementById('playground-max-tokens');
+    const maxHelp = document.getElementById('playground-max-tokens-help');
+    if (max && maxHelp) {
+      const n = Math.max(1, parseInt(max.value || '0', 10) || 0);
+      const words = Math.round(n * 0.75);
+      maxHelp.innerHTML = `A token is about 4 characters of English, so <b>${formatNumber(n)}</b> is roughly <b>${formatNumber(words)} words</b>. The answer stops there even mid-sentence. Reasoning models spend part of it thinking. The hub also skips models whose remaining quota cannot cover this much.`;
+    }
   }
 
   async function sendPlaygroundPrompt() {
@@ -2059,8 +2112,9 @@
     if (!card) return;
     card.style.display = 'flex';
     document.getElementById('tel-model').textContent = data.model;
-    document.getElementById('tel-latency').textContent = `${data.duration} ms`;
-    document.getElementById('tel-ttft').textContent = `${data.ttft} ms`;
+    const asTime = (ms) => (Number.isFinite(Number(ms)) ? secondsOf(Math.round(Number(ms))) : '-');
+    document.getElementById('tel-latency').textContent = asTime(data.duration);
+    document.getElementById('tel-ttft').textContent = asTime(data.ttft);
     document.getElementById('tel-tokens').textContent = `${data.promptTokens} in / ${data.completionTokens} out`;
   }
 
@@ -3011,6 +3065,11 @@
         sendPlaygroundPrompt();
       }
     });
+
+    document.getElementById('playground-model')?.addEventListener('change', describePlaygroundTarget);
+    document.getElementById('playground-temp')?.addEventListener('input', describePlaygroundSettings);
+    document.getElementById('playground-max-tokens')?.addEventListener('input', describePlaygroundSettings);
+    describePlaygroundSettings();
 
     // Presets
     document.querySelectorAll('.chip-preset').forEach(chip => {
