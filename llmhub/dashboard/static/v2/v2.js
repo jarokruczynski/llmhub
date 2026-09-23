@@ -244,10 +244,14 @@
   // The newest thing that happened to this pair, not merely the newest failure on record. A
   // success after a refusal retires the refusal, so a card stops flagging a quota error from
   // three days ago while the model is serving traffic today.
+  //
+  // Whether an unretired refusal still counts is the hub's call, not the page's: past its
+  // recent-failure window the hub reports "ok", and a red banner under a green badge is the
+  // contradiction this is here to avoid. Such a refusal stays on the card as muted history.
   function currentFailure(m) {
     if (!m.last_error) return null;
     if (m.last_ok_at && m.last_error_at && m.last_ok_at >= m.last_error_at) return null;
-    return { text: m.last_error, when: timeAgo(m.last_error_at) };
+    return { text: m.last_error, when: timeAgo(m.last_error_at), stale: m.status === 'ok' };
   }
 
   function baselineById(id) {
@@ -1396,7 +1400,11 @@
           ${quotaHtml || '<div class="text-muted" style="font-size:0.75rem">Declared limits unmetered / unlimited</div>'}
         </div>
 
-        ${failure ? `
+        ${failure && failure.stale ? `
+          <div class="text-muted" style="font-size:0.72rem; padding:0 2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="Refused ${escapeHtml(failure.when)} and not retried with success since; old enough that the hub no longer holds it against the model (${escapeHtml(failure.text)})">
+            last refusal ${escapeHtml(failure.when)}: ${escapeHtml(failure.text)}
+          </div>
+        ` : failure ? `
           <div style="font-size:0.72rem; color:var(--status-depleted); background:var(--status-depleted-bg); padding:4px 8px; border-radius:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(failure.text)} (${escapeHtml(failure.when)})">
             ⚠️ ${escapeHtml(failure.text)}${failure.when ? ` <span class="text-muted">· ${escapeHtml(failure.when)}</span>` : ''}
           </div>

@@ -280,6 +280,14 @@ countdown, latency, last error), Usage (what burns tokens: by app, by model, by 
 Queue (depth, per-app, per-job rows with cancel), Accounts (per provider: accounts, status),
 Promos (watchlist). Dark/light by prefers-color-scheme. English UI text. No build step.
 
+A model card's last error follows the badge, and the badge is the hub's call. `entry_status`
+reports `warning` while a refusal is the newest evidence for the pair and younger than
+`RECENT_FAILURE_H` (6 h); after that it reports `ok`. The card shows the refusal as a red
+banner only when the badge is not `ok`; past the window it stays on the card as muted history
+("last refusal 3d ago"). The first version of the banner had no age limit of its own, so 113
+pairs showed a green badge above a red quota banner, most of them pairs nothing had retried
+since the refusal.
+
 ## Out of scope v0
 Promo hunter automation, claude-code lane implementation, the transcript-extraction and
 OCR-batch apps' client migration

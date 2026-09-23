@@ -42,6 +42,13 @@ for the record but have no tags: those commits are not part of this repository.
   with `since=<rev>` and draws only what changed, so reading an older message is no longer
   thrown back to the top every two seconds.
 
+### Fixed
+
+- A model card no longer shows a red quota banner under a green "ok" badge. The hub stops
+  holding a refusal against a pair after six hours; the card kept showing it until a success
+  came after it, which for a pair nothing had retried meant forever. A refusal the hub no longer
+  counts is shown as muted history ("last refusal 3d ago") instead of a warning.
+
 ## [0.5.0] - 2026-09-17
 
 ### Removed

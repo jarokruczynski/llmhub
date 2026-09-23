@@ -103,8 +103,9 @@ def _models() -> list[dict[str, Any]]:
                 },
                 "monthly": None,
             },
-            "last_error": None,
-            "last_ok_at": iso(t - timedelta(minutes=2)),
+            "last_error": "quota: insufficient_quota",
+            "last_error_at": iso(t - timedelta(days=3)),
+            "last_ok_at": iso(t - timedelta(days=13)),
             "avg_latency_ms": 3305,
             "usage_today": {
                 "requests": 812,
