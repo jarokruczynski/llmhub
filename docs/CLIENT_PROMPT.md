@@ -8,7 +8,7 @@ how to call the local LLM gateway instead of guessing at an API.
 ## 1. What this is
 
 `llmhub` is a local, free-only LLM gateway running on this Mac. Base URL on this machine:
-`http://127.0.0.1:8800/v1`. From another device on the LAN: `http://mac.local/hub/v1` (Caddy
+`http://127.0.0.1:8800/v1`. From another device on the LAN: `http://<host>.local/hub/v1` (Caddy
 strips the `/hub` prefix); LAN calls need `Authorization: Bearer $LLMHUB_TOKEN` because only
 loopback is open, everything else needs the token. The wire format is OpenAI Chat Completions
 (`POST /v1/chat/completions`, same body and response shape as `openai` SDK expects). Only free
@@ -352,7 +352,7 @@ one queueing, and gives slots back as other apps arrive (nothing running is inte
 
 ## 7. Dashboard
 
-`http://llmhub.localhost/` on this Mac, `http://mac.local/hub/` from the LAN. Shows models
+`http://llmhub.localhost/` on this Mac, `http://<host>.local/hub/` from the LAN. Shows models
 (status, remaining quota per window, latency), usage, queue, accounts, and a promo watchlist.
 Forgive an exhausted model, disable/enable a model, and pause/resume an app are all available
 there (same actions as the `POST /api/models/{key}/forgive|disable|enable` and

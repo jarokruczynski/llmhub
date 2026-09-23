@@ -15,7 +15,7 @@ dry.
 - Repo: `~/llmhub` (NOT under ~/Documents: launchd cannot read there - TCC).
 - Python 3.12+, `uv`, FastAPI + uvicorn, SQLite at `~/.llmhub/hub.db`, httpx for upstream.
 - Listens 127.0.0.1:8800. Caddy exposes `http://llmhub.localhost` (Mac) and
-  `http://mac.local/hub/` (LAN, path prefix stripped by Caddy `handle_path`) -> dashboard
+  `http://<host>.local/hub/` (LAN, path prefix stripped by Caddy `handle_path`) -> dashboard
   must use RELATIVE urls only (no leading "/"), so it works under a prefix.
 - LaunchAgent `com.llmhub.gateway` (launchd/install.sh), logs `~/Library/Logs/llmhub/`.
 - Keys: env vars only, loaded from `~/.app-a/*.env` (KEY=value, chmod 600). The hub reads

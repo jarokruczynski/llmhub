@@ -1692,7 +1692,7 @@ def _app_shares() -> dict[str, dict[str, Any]]:
 RECORDER = Recorder()
 RECORDER_LOCK = threading.Lock()
 _REC_SYSTEM = {
-    "detektor": "You extract structured facts from meeting transcripts. Answer with JSON only.",
+    "transcripts": "You extract structured facts from meeting transcripts. Answer with JSON only.",
     "chat-bot": "You are a helpful assistant. Keep answers short.",
     "warehouse": "Classify each SKU description into one of: food, tools, garden, other.",
     "scout": "Summarise the provider page and list any free tier limits.",
@@ -1720,7 +1720,7 @@ def _rec_body(app: str, turn: int) -> dict[str, Any]:
             }
         )
         return {"model": "auto", "messages": [dict(m) for m in history]}
-    if app == "detektor":
+    if app == "transcripts":
         transcript = "\n".join(
             f"[{i:02d}:{random.randint(10, 59)}] Speaker {random.choice('ABC')}: "
             + random.choice(
@@ -1765,7 +1765,7 @@ def _rec_body(app: str, turn: int) -> dict[str, Any]:
 
 
 def _rec_answer(app: str, body: dict[str, Any]) -> str:
-    if app == "detektor":
+    if app == "transcripts":
         return '{"decisions": ["ship on friday"], "owners": {"rollout": "Speaker B"}}'
     if app == "chat-bot":
         last = body["messages"][-1]["content"]

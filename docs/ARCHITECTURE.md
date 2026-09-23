@@ -15,7 +15,7 @@ one YAML registry; the dashboard and the quick-add flow read and write both
 through the same process. A LaunchAgent execs the venv's `python3 -m llmhub`
 directly (not through `uv run` or a shell - macOS ties privacy grants to the
 first program in the exec chain), and Caddy publishes the dashboard on
-`llmhub.localhost` and under `mac.local/hub/*` on the LAN.
+`llmhub.localhost` and under `<host>.local/hub/*` on the LAN.
 
 ```mermaid
 flowchart LR
@@ -28,7 +28,7 @@ flowchart LR
     end
 
     subgraph outer["launchd + Caddy layer"]
-        CADDY["Caddy: llmhub.localhost, mac.local/hub/*"]
+        CADDY["Caddy: llmhub.localhost, HOST.local/hub/*"]
 
         subgraph proc["llmhub process (LaunchAgent execs venv python directly)"]
             GW["gateway: /v1/chat/completions, /jobs, api/*"]

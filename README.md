@@ -33,7 +33,7 @@ flowchart LR
     end
 
     subgraph outer["launchd + Caddy layer"]
-        CADDY["Caddy: llmhub.localhost, mac.local/hub/*"]
+        CADDY["Caddy: llmhub.localhost, HOST.local/hub/*"]
 
         subgraph proc["llmhub process (LaunchAgent execs venv python directly)"]
             GW["gateway: /v1/chat/completions, /jobs, api/*"]
@@ -475,7 +475,7 @@ llmhub.localhost {
     reverse_proxy 127.0.0.1:8800
 }
 
-mac.local {
+<host>.local {
     handle_path /hub/* {
         reverse_proxy 127.0.0.1:8800
     }
