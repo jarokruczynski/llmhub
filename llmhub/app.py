@@ -11,6 +11,7 @@ from .config import Settings
 from .envfile import source_env_dir
 from .health import HealthSweepService
 from .jobs import JobQueue
+from .pool_probe import PoolProbe
 from .runtime import Hub
 from .scout import ScoutService
 
@@ -33,10 +34,12 @@ def create_app(settings: Settings | None = None, hub: Hub | None = None) -> Fast
         await app.state.hub.jobs.start()
         await app.state.hub.scout.start()
         await app.state.hub.health.start()
+        await app.state.hub.pool_probe.start()
         log.info("llmhub %s started, registry %s", __version__, app.state.hub.settings.registry_path)
         try:
             yield
         finally:
+            await app.state.hub.pool_probe.stop()
             await app.state.hub.health.stop()
             await app.state.hub.scout.stop()
             await app.state.hub.jobs.stop()
@@ -47,6 +50,7 @@ def create_app(settings: Settings | None = None, hub: Hub | None = None) -> Fast
     hub.jobs = JobQueue(hub)
     hub.scout = ScoutService(hub)
     hub.health = HealthSweepService(hub)
+    hub.pool_probe = PoolProbe(hub)
 
     from . import api, gateway, jobs
 

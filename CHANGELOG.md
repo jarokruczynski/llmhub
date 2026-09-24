@@ -10,6 +10,14 @@ for the record but have no tags: those commits are not part of this repository.
 
 ## [Unreleased]
 
+### Changed
+
+- Antigravity (`agy`) quota parks cover the whole model group on both logins: a refusal on
+  any Gemini id parks every Gemini id, a refusal on a Claude or GPT id parks that group.
+  Parks from an older build spread at startup. The hub reads `agy -p /quota` at startup and
+  after each refusal and parks every group the report shows at 0% until its reset.
+  `/api/status` rows carry `exhausted_reason`, and the dashboard card shows it.
+
 ### Removed
 
 - The fallback to the key directory used before `~/.llmhub/env` was the default. Provider

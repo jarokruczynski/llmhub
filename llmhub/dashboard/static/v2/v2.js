@@ -1424,6 +1424,11 @@
           ${quotaHtml || '<div class="text-muted" style="font-size:0.75rem">Declared limits unmetered / unlimited</div>'}
         </div>
 
+        ${m.status === 'exhausted' && m.exhausted_reason ? `
+          <div class="text-muted" style="font-size:0.72rem; padding:0 2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(m.exhausted_reason)}">
+            parked, resets in ${escapeHtml(formatCountdown(m.reason))}: ${escapeHtml(m.exhausted_reason)}
+          </div>
+        ` : ''}
         ${failure && failure.stale ? `
           <div class="text-muted" style="font-size:0.72rem; padding:0 2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="Refused ${escapeHtml(failure.when)} and not retried with success since; old enough that the hub no longer holds it against the model (${escapeHtml(failure.text)})">
             last refusal ${escapeHtml(failure.when)}: ${escapeHtml(failure.text)}

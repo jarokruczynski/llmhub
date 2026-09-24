@@ -418,6 +418,7 @@ class QuotaTracker:
         scope: str | None = None,
         until: datetime | None = None,
         reset_named: bool = False,
+        event: bool = True,
     ) -> datetime:
         """`until` is the vendor's own "try again at" and can only shorten the park.
 
@@ -448,6 +449,9 @@ class QuotaTracker:
             if not (chosen in WINDOW_ORDER and hint_is_too_short):
                 until = override
         self.store.set_exhausted(entry.account_id, entry.key, until, reason, chosen)
+        if not event:
+            # the caller writes one event for a whole batch of pairs (a pool group park)
+            return until
         label = ", ".join(part for part in (chosen, note) if part)
         suffix = f" ({label})" if label else ""
         self.store.add_event(

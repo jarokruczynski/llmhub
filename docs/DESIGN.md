@@ -1251,20 +1251,42 @@ window that binds, so no `/quota` call is needed after a refusal. `Quota.next_re
 the exhaustion marker first, so the 429 `next_window_at` and a parked job's wake-up are that
 same instant instead of the next top of the hour.
 
-The pool is shared, so the catalog template carries `quota_shared: true`: a quota park on
-one login parks the same model id on every other provider with the same template and command
-to the same instant (`Router.park_pool_siblings`), and the second login does not spend a call
-to learn it. Known gap: only the same model id is parked. The pool is per model group
-(Gemini flash and pro together), but the hub has no model-to-group map, so a pro refusal
-leaves the flash ids of that group open; they are disabled on both blocks anyway. The pools are per model group (Gemini; Claude and GPT),
-each with a weekly and a five-hour limit, readable without spending anything via
-`agy -p /quota --output-format json`. Measured 2026-09-24: the two logins are two Google
-accounts, but they draw on ONE pool - six flash calls on the second login moved the first
-login's five-hour counter in lockstep, same reset second. The second block adds no budget;
-it is kept because it costs nothing. Because the pool is shared, the 2026-09-17 disables
-on `antigravity` (the flash ids and gpt-oss, reserved so scanner traffic cannot burn the
-window the pro and sonnet models need) are mirrored on `antigravity-2`; without that the
+The pools are per model group (Gemini flash and pro together; Claude and GPT together), each
+with a weekly and a five-hour limit, readable without spending anything via
+`agy -p /quota --output-format json` (`command.data.groups[].buckets[]`, each with
+`remaining_fraction` and `reset_time`; about 5 s). Measured 2026-09-24: the two logins are two
+Google accounts, but they draw on ONE pool - six flash calls on the second login moved the
+first login's five-hour counter in lockstep, same reset second. The second block adds no
+budget; it is kept because it costs nothing. Because the pool is shared, the 2026-09-17
+disables on `antigravity` (the flash ids and gpt-oss, reserved so scanner traffic cannot burn
+the window the pro and sonnet models need) are mirrored on `antigravity-2`; without that the
 second block would reopen the same pool to the `auto` and `vision` tails.
+
+So the catalog template carries `quota_shared: true` and a `quota_groups` map: the vendor's
+group name (as `/quota` prints it) -> model id prefixes (`Gemini Models`: `gemini-`;
+`Claude and GPT models`: `claude-`, `gpt-`). A quota park on any model parks every model of
+its group on every provider with the same template and command, both logins, to the same
+instant (`Router.pool_members`, `Router.park_pool_siblings`). The note on each spread row
+names the origin ("shared pool group Gemini Models via antigravity/gemini-3.1-pro-high
+(...): <refusal>"); `/api/status` returns it as `exhausted_reason` next to `status:
+exhausted` and the reset in `reason`, and the dashboard card prints it. Disabled models are
+parked as well (the row only; the status still says `disabled`), so enabling one mid-park
+does not reopen the pool. A model id the map puts in no group shares with its own id on the
+other logins only. One summary event is written per spread, not one per pair.
+
+Parks written before the map existed covered one model id. `Router.spread_pool_parks` runs
+at startup and on every reload and re-applies each live origin park (not the "shared pool"
+rows themselves) to its whole group, so a model added to a pooled block also joins the live
+park.
+
+`PoolProbe` (`llmhub/pool_probe.py`) reads `/quota` once per pool at startup, and again
+through the refused login after each quota refusal (at most once a minute per provider, in
+the background, same env/HOME/workdir as a call). Every group with a live bucket at 0 is
+parked to that bucket's `reset_time`; a `disabled` bucket is skipped (agy disables the
+five-hour bucket while the weekly one is spent and shows it at 100%). A refusal names only
+the refused group's reset; the report names the other group too, so a spent Claude/GPT
+week is known without an Opus call. The probe never unparks: a group with room is left as
+it is. It does not run in tests (the ASGI test transport skips the lifespan).
 
 Routing: a model with `vision` in `caps` enters the `vision` alias pool and matches
 `X-Hub-Require: vision` like any other. The pool is every entry, sorted with the alias

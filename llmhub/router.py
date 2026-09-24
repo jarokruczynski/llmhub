@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .config import Entry, Registry
-from .providers_catalog import quota_shared
+from .providers_catalog import quota_group, quota_shared
 from .quota import QuotaTracker
 from .store import Store, parse_iso, to_iso
 from .vendor_errors import Classification
@@ -237,6 +237,8 @@ class Router:
         # so an ok on a pair in this set means the row has expired: the DELETE is worth one
         # call, and every other ok skips the database entirely.
         self._unavailable: set[tuple[str, str]] = set()
+        # set by PoolProbe.start: re-reads a pooled CLI's quota report after a refusal
+        self.pool_probe: Callable[[Entry], None] | None = None
 
     # --- in-flight registry ----------------------------------------------
     # The usage table answers "which model did this app use lately"; nothing answered "right
@@ -386,36 +388,91 @@ class Router:
         for key in [k for k in self._cooldowns if k[1] == model_key]:
             self._cooldowns.pop(key, None)
 
-    def pool_siblings(self, entry: Entry) -> list[Entry]:
-        """The same model on the other logins of a CLI whose logins draw on one quota pool.
+    def pool_members(self, anchor: Entry, group: str | None) -> list[Entry]:
+        """Every entry that draws on the pool `anchor` draws on, `anchor` included.
 
         agy's two logins are two Google accounts but one pool (measured: one login's calls move
-        the other's counters in lockstep, same reset second), so a refusal on one is a refusal
-        on the other. Same template, same command, same model id; the template opts in.
+        the other's counters in lockstep, same reset second), and inside the pool the quota is
+        per model group (all Gemini ids together; Claude and GPT together). Same template, same
+        command, same group; the template opts in with `quota_shared` and names the groups in
+        `quota_groups`. A model the template puts in no group shares only with its own id.
         """
-        if not entry.is_cli or not quota_shared(entry.template_id):
+        if not anchor.is_cli or not quota_shared(anchor.template_id):
             return []
+        members = []
+        for other in self.registry.entries():
+            if not other.is_cli or other.template_id != anchor.template_id:
+                continue
+            if other.cli_command != anchor.cli_command:
+                continue
+            if group is not None:
+                if quota_group(other.template_id, other.model.id) != group:
+                    continue
+            elif other.model.id != anchor.model.id:
+                continue
+            members.append(other)
+        return members
+
+    def pool_siblings(self, entry: Entry) -> list[Entry]:
+        """The entries a quota refusal on `entry` also applies to: its pool group minus itself."""
+        group = quota_group(entry.template_id, entry.model.id)
         return [
             other
-            for other in self.registry.entries()
-            if other.model.id == entry.model.id
-            and other.template_id == entry.template_id
-            and other.cli_command == entry.cli_command
-            and (other.provider_name, other.account_id) != (entry.provider_name, entry.account_id)
+            for other in self.pool_members(entry, group)
+            if (other.account_id, other.key) != (entry.account_id, entry.key)
         ]
 
-    def park_pool_siblings(self, entry: Entry, until: datetime, reason: str) -> None:
-        """Park the pool siblings to the same instant, so none of them spends a call to learn it."""
-        for other in self.pool_siblings(entry):
+    def park_entries(self, entries: list[Entry], until: datetime, reason: str) -> list[str]:
+        """Park each entry to `until` unless it is already parked at least that long.
+
+        One summary event instead of one per entry: a group refusal touches every model of
+        the group on every login, and thirty identical lines would bury the event feed.
+        """
+        parked = []
+        for other in entries:
             current = self.quota.exhausted_until(other)
             if current is not None and current >= until:
                 continue
-            self.quota.mark_exhausted(
-                other,
-                f"shared pool with {entry.key} ({entry.account_id}): {reason}",
-                until=until,
-                reset_named=True,
+            self.quota.mark_exhausted(other, reason, until=until, reset_named=True, event=False)
+            parked.append(other.key)
+        if parked:
+            self.store.add_event(
+                kind="quota",
+                message=f"exhausted until {to_iso(until)} on {len(parked)} pairs: {reason}"[:500],
+                model=parked[0],
+                account=None,
             )
+        return parked
+
+    def park_pool_siblings(self, entry: Entry, until: datetime, reason: str) -> list[str]:
+        """Park the pool siblings to the same instant, so none of them spends a call to learn it."""
+        group = quota_group(entry.template_id, entry.model.id)
+        if group is not None:
+            note = f"shared pool group {group} via {entry.key} ({entry.account_id}): {reason}"
+        else:
+            note = f"shared pool with {entry.key} ({entry.account_id}): {reason}"
+        return self.park_entries(self.pool_siblings(entry), until, note)
+
+    def spread_pool_parks(self, now: datetime | None = None) -> int:
+        """Re-apply the live pool parks to their whole group; run at startup and on reload.
+
+        A park written before the group map existed (or before a model joined the registry)
+        covers one model id only. Rows that are themselves a spread ("shared pool ...") are
+        skipped, so a note never wraps another note.
+        """
+        now = (now or datetime.now(UTC)).astimezone(UTC)
+        by_pair = {(entry.account_id, entry.key): entry for entry in self.registry.entries()}
+        spread = 0
+        for row in self.store.exhausted_all(now):
+            entry = by_pair.get((row["account"], row["model"]))
+            if entry is None or str(row["reason"] or "").startswith("shared pool"):
+                continue
+            if not entry.is_cli or not quota_shared(entry.template_id):
+                continue
+            spread += len(
+                self.park_pool_siblings(entry, parse_iso(row["until_ts"]), str(row["reason"] or "quota"))
+            )
+        return spread
 
     def mark_unavailable(
         self, entry: Entry, classification: Classification, now: datetime | None = None
@@ -889,6 +946,9 @@ class Router:
                                     reset_named=exc.classification.reset_named,
                                 )
                                 self.park_pool_siblings(entry, parked_until, reason)
+                                if self.pool_probe is not None and quota_shared(entry.template_id):
+                                    # the refusal names one group's reset; the report names all
+                                    self.pool_probe(entry)
                                 break
                             if failure == "too_large":
                                 # not a quota hit and not retryable on this candidate: record

@@ -611,6 +611,10 @@ class Store:
             return None
         return row
 
+    def exhausted_all(self, now: datetime) -> list[dict[str, Any]]:
+        """Every park still live at `now`, oldest first."""
+        return self.query("SELECT * FROM exhausted WHERE until_ts > ? ORDER BY ts", (to_iso(now),))
+
     def clear_exhausted(self, account: str, model: str | None = None) -> int:
         if model is None:
             cur = self.execute("DELETE FROM exhausted WHERE account = ?", (account,))

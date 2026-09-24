@@ -7,8 +7,10 @@ import pytest
 import yaml
 
 from llmhub.config import Entry
+from llmhub.providers_catalog import quota_group
 from llmhub.router import AllCandidatesFailed, UpstreamError
 from llmhub.runtime import Hub
+from llmhub.status import model_rows
 from llmhub.store import parse_iso
 from llmhub.vendor_errors import classify
 
@@ -16,6 +18,9 @@ from .conftest import entry_of
 from .test_vendor_errors import AGY_WEEKLY_REFUSAL
 
 PRO = "gemini-3.1-pro-high"
+LOW = "gemini-3.1-pro-low"
+FLASH = "gemini-3.8-flash-low"
+OPUS = "claude-opus-4-6-thinking"
 WEEKLY = timedelta(hours=6, minutes=9, seconds=21)
 
 
@@ -27,7 +32,9 @@ def agy_block(account: str, template: str = "antigravity") -> dict[str, Any]:
         "accounts": [{"id": account, "api_key_env": None}],
         "models": [
             {"id": PRO, "caps": ["text"], "free": {}},
-            {"id": "gemini-3.8-flash-low", "caps": ["text"], "free": {}},
+            {"id": LOW, "caps": ["text"], "free": {}},
+            {"id": FLASH, "caps": ["text"], "free": {}},
+            {"id": OPUS, "caps": ["text"], "free": {}},
         ],
     }
 
@@ -68,10 +75,87 @@ async def test_weekly_refusal_parks_both_logins_until_the_named_reset(agy_hub: H
         assert next_window is not None and parse_iso(next_window) == until
 
 
-async def test_shared_pool_parks_only_the_same_model_id(agy_hub: Hub) -> None:
+def test_quota_group_by_prefix() -> None:
+    assert quota_group("antigravity", PRO) == "Gemini Models"
+    assert quota_group("antigravity", FLASH) == "Gemini Models"
+    assert quota_group("antigravity", OPUS) == "Claude and GPT models"
+    assert quota_group("antigravity", "gpt-oss-120b-medium") == "Claude and GPT models"
+    assert quota_group("antigravity", "something-else") is None
+    assert quota_group("groq", PRO) is None
+
+
+async def test_a_refusal_parks_the_whole_group_on_both_logins(agy_hub: Hub) -> None:
     await refuse_weekly(agy_hub, f"antigravity/{PRO}")
-    flash = entry_of(agy_hub, "antigravity-2/gemini-3.8-flash-low", "antigravity-2-jaro")
-    assert agy_hub.quota.exhausted_until(flash) is None
+    origin = agy_hub.quota.exhausted_until(entry_of(agy_hub, f"antigravity/{PRO}", "antigravity-jaro"))
+    assert origin is not None
+    for provider, account in (("antigravity", "antigravity-jaro"), ("antigravity-2", "antigravity-2-jaro")):
+        for model in (PRO, LOW, FLASH):
+            entry = entry_of(agy_hub, f"{provider}/{model}", account)
+            assert agy_hub.quota.exhausted_until(entry) == origin, entry.key
+    row = agy_hub.store.exhausted_until("antigravity-2-jaro", f"antigravity-2/{LOW}", datetime.now(UTC))
+    assert row is not None
+    assert row["reason"].startswith(f"shared pool group Gemini Models via antigravity/{PRO}")
+
+
+async def test_a_gemini_refusal_leaves_the_claude_group_open(agy_hub: Hub) -> None:
+    await refuse_weekly(agy_hub, f"antigravity/{PRO}")
+    for provider, account in (("antigravity", "antigravity-jaro"), ("antigravity-2", "antigravity-2-jaro")):
+        assert agy_hub.quota.exhausted_until(entry_of(agy_hub, f"{provider}/{OPUS}", account)) is None
+
+
+async def test_a_claude_refusal_leaves_the_gemini_group_open(agy_hub: Hub) -> None:
+    await refuse_weekly(agy_hub, f"antigravity-2/{OPUS}")
+    assert (
+        agy_hub.quota.exhausted_until(entry_of(agy_hub, f"antigravity/{OPUS}", "antigravity-jaro"))
+        is not None
+    )
+    for model in (PRO, LOW, FLASH):
+        assert (
+            agy_hub.quota.exhausted_until(entry_of(agy_hub, f"antigravity/{model}", "antigravity-jaro"))
+            is None
+        )
+
+
+async def test_a_group_park_writes_one_event(agy_hub: Hub) -> None:
+    await refuse_weekly(agy_hub, f"antigravity/{PRO}")
+    rows = agy_hub.store.query("SELECT message FROM events WHERE kind = 'quota'")
+    spread = [row for row in rows if "shared pool group" in row["message"]]
+    assert len(spread) == 1
+    assert "on 5 pairs" in spread[0]["message"]
+
+
+async def test_a_park_from_before_the_group_map_spreads_on_startup(agy_hub: Hub) -> None:
+    origin = entry_of(agy_hub, f"antigravity-2/{PRO}", "antigravity-2-jaro")
+    until = datetime.now(UTC) + WEEKLY
+    agy_hub.quota.mark_exhausted(
+        origin, "Individual quota reached. Resets in 2h.", until=until, reset_named=True
+    )
+    # the old build parked the same id on the other login, with its own note
+    agy_hub.quota.mark_exhausted(
+        entry_of(agy_hub, f"antigravity/{PRO}", "antigravity-jaro"),
+        f"shared pool with antigravity-2/{PRO} (antigravity-2-jaro): quota",
+        until=until,
+        reset_named=True,
+    )
+    agy_hub.reload()
+    for provider, account in (("antigravity", "antigravity-jaro"), ("antigravity-2", "antigravity-2-jaro")):
+        assert agy_hub.quota.exhausted_until(entry_of(agy_hub, f"{provider}/{LOW}", account)) == until
+        assert agy_hub.quota.exhausted_until(entry_of(agy_hub, f"{provider}/{OPUS}", account)) is None
+    row = agy_hub.store.exhausted_until("antigravity-jaro", f"antigravity/{LOW}", datetime.now(UTC))
+    assert row is not None and row["reason"].startswith(
+        f"shared pool group Gemini Models via antigravity-2/{PRO}"
+    )
+
+
+async def test_status_says_where_a_group_park_came_from(agy_hub: Hub) -> None:
+    await refuse_weekly(agy_hub, f"antigravity/{PRO}")
+    rows = {(row["account"], row["key"]): row for row in model_rows(agy_hub)}
+    low = rows[("antigravity-2-jaro", f"antigravity-2/{LOW}")]
+    assert low["status"] == "exhausted"
+    assert low["exhausted_reason"].startswith(f"shared pool group Gemini Models via antigravity/{PRO}")
+    pro = rows[("antigravity-jaro", f"antigravity/{PRO}")]
+    assert parse_iso(low["reason"]) == parse_iso(pro["reason"])
+    assert rows[("antigravity-jaro", f"antigravity/{OPUS}")]["exhausted_reason"] is None
 
 
 async def test_a_template_without_a_shared_pool_parks_only_itself(hub: Hub) -> None:

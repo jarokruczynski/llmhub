@@ -37,10 +37,14 @@ class Hub:
             unavailable_ttl_s=settings.unavailable_ttl_s,
             max_attempts=settings.max_attempts,
         )
+        # a pool park written before the group map, or by an older build, covers one model id;
+        # spread it to its whole group before anything is routed
+        self.router.spread_pool_parks()
         self.client = client or httpx.AsyncClient(timeout=DEFAULT_TIMEOUT, follow_redirects=False)
         self.jobs: Any = None
         self.scout: Any = None
         self.health: Any = None
+        self.pool_probe: Any = None
         # off until someone arms it from the console; holds nothing until then
         self.recorder = Recorder()
 
@@ -89,8 +93,11 @@ class Hub:
         router._waiters = self.router._waiters
         router._timeouts = self.router._timeouts
         router.cancelled_jobs = self.router.cancelled_jobs
+        router.pool_probe = self.router.pool_probe
         self.registry = registry
         self.router = router
+        # a model added to a pooled provider joins its group's live park
+        router.spread_pool_parks()
         log.info(
             "registry reloaded: %d providers, %d (account, model) pairs",
             len(registry.providers),

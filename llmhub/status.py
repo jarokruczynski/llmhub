@@ -142,6 +142,11 @@ def model_rows(
         status, reason = entry_status(
             hub, entry, now, disabled, room=room, unavailable=unavailable_all, stats=stats
         )
+        # why the pair is parked: a pool group park names the refusal it rode in on, so a card
+        # parked by another model's refusal says whose
+        parked_row = (
+            hub.store.exhausted_until(entry.account_id, entry.key, now) if status == "exhausted" else None
+        )
         observed = observed_all.get(pair, {})
         windows = {name: state.as_dict() for name, state in hub.quota.windows(entry, now, observed).items()}
         rows.append(
@@ -170,6 +175,7 @@ def model_rows(
                 "expires_at": to_iso(entry.model.expires_at()) if entry.model.expires_at() else None,
                 "status": status,
                 "reason": reason,
+                "exhausted_reason": parked_row["reason"] if parked_row else None,
                 "disabled": entry.key in disabled,
                 "key_present": entry.key_present,
                 "api_key_env": entry.account.api_key_env,

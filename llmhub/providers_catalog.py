@@ -971,6 +971,13 @@ PROVIDER_TEMPLATES: tuple[dict[str, Any], ...] = (
         # two logins, one pool (measured 2026-09-24): a quota park on one login parks the
         # same model on the others
         "quota_shared": True,
+        # the pool is per model group, not per model: `agy -p /quota` lists the groups by
+        # these names, each with its own weekly and five-hour bucket. A refusal on any model
+        # of a group parks every model of that group on every login. Matched by id prefix.
+        "quota_groups": {
+            "Gemini Models": ("gemini-",),
+            "Claude and GPT models": ("claude-", "gpt-"),
+        },
         "notes": "free plan of the Antigravity agent CLI; quota unpublished and reset window "
         "unconfirmed; Google may use the data, so public data only. Sign in with `agy` in a "
         "terminal - there is no key to paste.",
@@ -1232,6 +1239,20 @@ def quota_shared(template_id: str | None) -> bool:
     """True when every login of this template draws on one quota pool (agy's two accounts)."""
     known = TEMPLATES_BY_ID.get(template_id or "")
     return bool((known or {}).get("quota_shared"))
+
+
+def quota_groups(template_id: str | None) -> dict[str, tuple[str, ...]]:
+    """Quota group name -> model id prefixes, for a template whose pool is per model group."""
+    known = TEMPLATES_BY_ID.get(template_id or "")
+    return dict((known or {}).get("quota_groups") or {})
+
+
+def quota_group(template_id: str | None, model_id: str) -> str | None:
+    """The quota group a model draws on, or None when the template names no group for it."""
+    for name, prefixes in quota_groups(template_id).items():
+        if model_id.startswith(tuple(prefixes)):
+            return name
+    return None
 
 
 def quota_scope_default(template_id: str | None) -> str | None:
