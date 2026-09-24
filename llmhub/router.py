@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .config import Entry, Registry
+from .providers_catalog import quota_shared
 from .quota import QuotaTracker
 from .store import Store, parse_iso, to_iso
 from .vendor_errors import Classification
@@ -384,6 +385,37 @@ class Router:
     def clear_cooldown(self, model_key: str) -> None:
         for key in [k for k in self._cooldowns if k[1] == model_key]:
             self._cooldowns.pop(key, None)
+
+    def pool_siblings(self, entry: Entry) -> list[Entry]:
+        """The same model on the other logins of a CLI whose logins draw on one quota pool.
+
+        agy's two logins are two Google accounts but one pool (measured: one login's calls move
+        the other's counters in lockstep, same reset second), so a refusal on one is a refusal
+        on the other. Same template, same command, same model id; the template opts in.
+        """
+        if not entry.is_cli or not quota_shared(entry.template_id):
+            return []
+        return [
+            other
+            for other in self.registry.entries()
+            if other.model.id == entry.model.id
+            and other.template_id == entry.template_id
+            and other.cli_command == entry.cli_command
+            and (other.provider_name, other.account_id) != (entry.provider_name, entry.account_id)
+        ]
+
+    def park_pool_siblings(self, entry: Entry, until: datetime, reason: str) -> None:
+        """Park the pool siblings to the same instant, so none of them spends a call to learn it."""
+        for other in self.pool_siblings(entry):
+            current = self.quota.exhausted_until(other)
+            if current is not None and current >= until:
+                continue
+            self.quota.mark_exhausted(
+                other,
+                f"shared pool with {entry.key} ({entry.account_id}): {reason}",
+                until=until,
+                reset_named=True,
+            )
 
     def mark_unavailable(
         self, entry: Entry, classification: Classification, now: datetime | None = None
@@ -842,9 +874,10 @@ class Router:
                                 # the exhaustion is pinned to
                                 self.quota.record_observed(entry, exc.classification)
                                 wait = exc.classification.retry_after_s
-                                self.quota.mark_exhausted(
+                                reason = exc.classification.message or exc.classification.rule or "quota"
+                                parked_until = self.quota.mark_exhausted(
                                     entry,
-                                    exc.classification.message or exc.classification.rule or "quota",
+                                    reason,
                                     scope=exc.classification.scope,
                                     # a vendor naming its own "try again at" knows better than
                                     # the calendar: a rolling day is not the day the hub tracks
@@ -853,7 +886,9 @@ class Router:
                                         if wait is not None
                                         else None
                                     ),
+                                    reset_named=exc.classification.reset_named,
                                 )
+                                self.park_pool_siblings(entry, parked_until, reason)
                                 break
                             if failure == "too_large":
                                 # not a quota hit and not retryable on this candidate: record

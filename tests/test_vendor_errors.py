@@ -487,6 +487,34 @@ def test_an_agy_quota_refusal_parks_until_the_reset_it_names() -> None:
     assert result.retry_after_s == 11 * 3600 + 60 + 43
 
 
+# the real refusal on 2026-09-24T03:08:42Z with the Gemini weekly pool spent: agy names the
+# weekly reset (09:18:04Z), not the five-hour one, which `agy -p /quota` showed as disabled
+AGY_WEEKLY_REFUSAL = (
+    "Individual quota reached. Please upgrade your subscription to increase your limits. "
+    "Resets in 6h9m21s.\n"
+    "error: Individual quota reached. Please upgrade your subscription to increase your limits. "
+    "Resets in 6h9m21s.\n"
+    'AGY_ERROR: {"short_error":"RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please '
+    'upgrade your subscription to increase your limits. Resets in 6h9m21s.","status":'
+    '"RESOURCE_EXHAUSTED","error_code":429,"code_kind":"http","retryable":true}'
+)
+
+
+def test_an_agy_weekly_refusal_names_its_reset() -> None:
+    result = classify(None, AGY_WEEKLY_REFUSAL, "antigravity")
+    assert (result.kind, result.rule) == ("quota", "antigravity-quota")
+    assert result.retry_after_s == 6 * 3600 + 9 * 60 + 21
+    assert result.reset_named is True
+
+
+def test_a_pacing_delay_is_not_a_named_reset() -> None:
+    body = json.dumps({"error": {"message": "please try again in 5s"}})
+    result = classify(429, body, "alpha", {"retry-after": "600"})
+    assert result.retry_after_s == 5.0
+    assert result.reset_named is False
+    assert classify(429, "{}", "alpha", {"Retry-After": "45"}).reset_named is False
+
+
 def test_retry_after_from_a_header_when_the_body_says_nothing() -> None:
     result = classify(429, json.dumps({"error": {"message": "slow down"}}), "alpha", {"Retry-After": "45"})
     assert result.retry_after_s == 45.0

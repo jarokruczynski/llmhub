@@ -365,7 +365,15 @@ class QuotaTracker:
         return now + timedelta(hours=1), None
 
     def next_reset(self, entry: Entry, now: datetime | None = None) -> datetime:
+        """When the pair can be used again: its exhaustion marker first, then the calendar.
+
+        A parked pair is not usable at the top of the next hour just because its windows roll
+        over then; a weekly pool the vendor says resets at 09:18 stays empty until 09:18.
+        """
         now = (now or datetime.now(UTC)).astimezone(UTC)
+        marker = self.exhausted_until(entry, now)
+        if marker is not None and marker > now:
+            return marker
         return self.earliest_reset(entry, now)[0]
 
     def window_at_limit(self, entry: Entry, window: str, spec: QuotaWindow, now: datetime) -> bool:
@@ -409,8 +417,15 @@ class QuotaTracker:
         now: datetime | None = None,
         scope: str | None = None,
         until: datetime | None = None,
+        reset_named: bool = False,
     ) -> datetime:
         """`until` is the vendor's own "try again at" and can only shorten the park.
+
+        Unless `reset_named`: then `until` is the reset of the vendor's own window ("Resets in
+        6h9m21s") and it replaces the park in both directions. The hub's windows for such a
+        vendor are guesses (agy's are an empty `free: {}`, so the park fell back to the next
+        top of the hour), and a spent weekly pool parked hourly costs one refused call per hour
+        until the week rolls over.
 
         A 429 that says "try again in 27m" on a daily bucket is naming a rolling window, not
         the calendar day. Believing it costs at most one more 429; ignoring it parks a pair
@@ -425,7 +440,10 @@ class QuotaTracker:
         now = (now or datetime.now(UTC)).astimezone(UTC)
         override = until
         until, chosen, note = self.exhaustion_target(entry, now, scope)
-        if override is not None and override < until:
+        if override is not None and reset_named:
+            # the hub's window did not decide it, so it is not recorded as the scope
+            until, chosen, note = override, None, "named reset"
+        elif override is not None and override < until:
             hint_is_too_short = (override - now).total_seconds() < RETRY_HINT_MIN_S
             if not (chosen in WINDOW_ORDER and hint_is_too_short):
                 until = override

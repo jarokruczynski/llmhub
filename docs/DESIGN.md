@@ -1239,9 +1239,24 @@ images; Copilot keeps the 400 "cli providers take text only".
   on the API-key path. The template ids carry `vision`, but the login path is dead (above).
 
 Quota: an agy refusal reads "Individual quota reached. ... Resets in 11h1m43s." (after
-about two minutes of agy's own retries). `Resets in <duration>` is now one of the
-retry-after phrases in `vendor_errors`, so the pair is parked until that instant rather than
-until the template's daily default. The pools are per model group (Gemini; Claude and GPT),
+about two minutes of agy's own retries). `Resets in <duration>` is a named reset in
+`vendor_errors` (`Classification.reset_named`), and the pair is parked until exactly that
+instant, in both directions. A plain retry-after hint may only shorten a park; a named reset
+may also lengthen it. It has to: agy's models declare no windows (`free: {}`), so the hub's
+own target is the next top of the hour. With the weekly pool spent (2026-09-24 03:08Z, "Resets
+in 6h9m21s" = the weekly reset 09:18Z, the five-hour bucket shown as `disabled` by `/quota`)
+the hint-only-shortens rule threw the vendor's instant away and parked hourly, so each
+reader burned one refused call per hour until the week rolled over. agy always names the
+window that binds, so no `/quota` call is needed after a refusal. `Quota.next_reset` now reads
+the exhaustion marker first, so the 429 `next_window_at` and a parked job's wake-up are that
+same instant instead of the next top of the hour.
+
+The pool is shared, so the catalog template carries `quota_shared: true`: a quota park on
+one login parks the same model id on every other provider with the same template and command
+to the same instant (`Router.park_pool_siblings`), and the second login does not spend a call
+to learn it. Known gap: only the same model id is parked. The pool is per model group
+(Gemini flash and pro together), but the hub has no model-to-group map, so a pro refusal
+leaves the flash ids of that group open; they are disabled on both blocks anyway. The pools are per model group (Gemini; Claude and GPT),
 each with a weekly and a five-hour limit, readable without spending anything via
 `agy -p /quota --output-format json`. Measured 2026-09-24: the two logins are two Google
 accounts, but they draw on ONE pool - six flash calls on the second login moved the first

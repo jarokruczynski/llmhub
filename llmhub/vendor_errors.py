@@ -236,13 +236,16 @@ RETRY_AFTER_PHRASES: tuple[re.Pattern[str], ...] = (
     re.compile(r"try again in\s+(.{1,40})", re.IGNORECASE),
     re.compile(r"retry after\s+(.{1,40})", re.IGNORECASE),
     re.compile(r"retry in\s+(.{1,40})", re.IGNORECASE),
-    # agy: "Individual quota reached. ... Resets in 11h1m43s." - the pool's own reset, weekly or
-    # five-hourly, so it beats the template's daily default by hours in either direction
-    re.compile(r"resets in\s+(.{1,40})", re.IGNORECASE),
     re.compile(r"[\"']?retry[_-]after[\"']?\s*[:=]\s*[\"']?(\d+(?:\.\d+)?)", re.IGNORECASE),
     # google puts it in the error details as a RetryInfo `retryDelay: "9.026s"`
     re.compile(r"[\"']?retry[_-]?delay[\"']?\s*[:=]\s*[\"']?(\d+(?:\.\d+)?\s*[a-z]*)", re.IGNORECASE),
 )
+
+# A reset the vendor names for its own window, as opposed to a pacing delay. agy: "Individual
+# quota reached. ... Resets in 6h9m21s." With the weekly pool spent it names the weekly reset,
+# with only the five-hour pool spent the five-hour one: always the window that binds. So it
+# is trusted in both directions, where a retry-after phrase may only shorten a park.
+NAMED_RESET_PHRASES: tuple[re.Pattern[str], ...] = (re.compile(r"resets in\s+(.{1,40})", re.IGNORECASE),)
 
 # Anchored at the start of the phrase so a later number in the same sentence cannot leak in.
 # No \b after a unit: "27m44s" has no word boundary between "m" and "4".
@@ -263,6 +266,18 @@ def parse_duration(text: str) -> float | None:
         return hours * 3600 + minutes * 60 + seconds
     bare = BARE_SECONDS_RE.match(text)
     return float(bare.group(1)) if bare else None
+
+
+def named_reset_from(text: str) -> float | None:
+    """Seconds until the reset the vendor names for its own window. None = it named none."""
+    for pattern in NAMED_RESET_PHRASES:
+        match = pattern.search(text)
+        if not match:
+            continue
+        value = parse_duration(match.group(1))
+        if value is not None and value > 0:
+            return value
+    return None
 
 
 def retry_after_from(text: str, headers: Any = None, now: datetime | None = None) -> float | None:
@@ -368,6 +383,9 @@ class Classification:
     scope: Scope | None = None
     # seconds the vendor asked us to wait before trying this pair again; None = it said nothing
     retry_after_s: float | None = None
+    # True when retry_after_s is the vendor's own window reset ("Resets in 6h9m21s"), which may
+    # lengthen a park as well as shorten it; False for a pacing hint or a Retry-After header
+    reset_named: bool = False
     # what the body said it counts: metric, window, the vendor's own limit and its used count.
     # None = the body named nothing; any field can still be None on its own.
     quota_detail: dict[str, Any] | None = None
@@ -611,7 +629,13 @@ def classify(
 ) -> Classification:
     result = _classify(status_code, body, provider)
     if result.retry_after_s is None:
-        result.retry_after_s = retry_after_from(_text_of(body), headers)
+        text = _text_of(body)
+        reset = named_reset_from(text)
+        if reset is not None:
+            result.retry_after_s = reset
+            result.reset_named = True
+        else:
+            result.retry_after_s = retry_after_from(text, headers)
     return result
 
 

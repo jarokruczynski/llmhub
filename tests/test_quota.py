@@ -171,6 +171,43 @@ def test_long_retry_hint_still_shortens_a_daily_park(hub: Hub) -> None:
     assert exhausted_row(hub, entry)["scope"] == "daily"
 
 
+def test_named_reset_lengthens_an_hourly_park(hub: Hub) -> None:
+    # agy with the weekly pool spent: the hub's own window would free the pair at 04:00, the
+    # vendor says 09:18. The vendor's reset wins, so the pair is not retried every hour.
+    now = datetime(2026, 9, 24, 3, 8, 42, tzinfo=UTC)
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    reset = now + timedelta(hours=6, minutes=9, seconds=21)
+    until = hub.quota.mark_exhausted(entry, "Resets in 6h9m21s.", now, until=reset, reset_named=True)
+    assert until == reset
+    assert exhausted_row(hub, entry)["scope"] is None
+    assert "(named reset)" in last_quota_event(hub)
+    # what next_window_at and the jobs see: the marker, not the next top of the hour
+    assert hub.quota.next_reset(entry, now + timedelta(hours=1)) == reset
+
+
+def test_named_reset_still_shortens_a_daily_park(hub: Hub) -> None:
+    now = datetime(2026, 9, 7, 13, 0, tzinfo=UTC)
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    reset = now + timedelta(minutes=30)
+    until = hub.quota.mark_exhausted(
+        entry, "Resets in 30m.", now, scope="daily", until=reset, reset_named=True
+    )
+    assert until == reset
+
+
+def test_unnamed_long_hint_still_cannot_lengthen_a_park(hub: Hub) -> None:
+    now = datetime(2026, 9, 7, 13, 0, tzinfo=UTC)
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    until = hub.quota.mark_exhausted(entry, "try again in 6h", now, until=now + timedelta(hours=6))
+    assert until == datetime(2026, 9, 7, 14, 0, tzinfo=UTC)
+
+
+def test_next_reset_without_a_marker_is_the_calendar(hub: Hub) -> None:
+    now = datetime(2026, 9, 7, 13, 20, tzinfo=UTC)
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    assert hub.quota.next_reset(entry, now) == datetime(2026, 9, 7, 14, 0, tzinfo=UTC)
+
+
 def test_allowance_scope_without_expiry_notes_no_reset(hub: Hub) -> None:
     now = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
     entry = entry_of(hub, "gamma/openended", "gamma-1")

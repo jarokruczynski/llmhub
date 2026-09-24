@@ -968,6 +968,9 @@ PROVIDER_TEMPLATES: tuple[dict[str, Any], ...] = (
         # the CLI says "quota"/"rate limit" without naming a window; the free plan is a daily
         # allowance, so a scopeless quota error parks the model until midnight
         "quota_scope_default": "daily",
+        # two logins, one pool (measured 2026-09-24): a quota park on one login parks the
+        # same model on the others
+        "quota_shared": True,
         "notes": "free plan of the Antigravity agent CLI; quota unpublished and reset window "
         "unconfirmed; Google may use the data, so public data only. Sign in with `agy` in a "
         "terminal - there is no key to paste.",
@@ -1223,6 +1226,12 @@ def catalog_context(template_id: str | None) -> dict[str, int]:
         if isinstance(context, int) and context > 0 and isinstance(model_id, str):
             out[model_id] = context
     return out
+
+
+def quota_shared(template_id: str | None) -> bool:
+    """True when every login of this template draws on one quota pool (agy's two accounts)."""
+    known = TEMPLATES_BY_ID.get(template_id or "")
+    return bool((known or {}).get("quota_shared"))
 
 
 def quota_scope_default(template_id: str | None) -> str | None:
