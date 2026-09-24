@@ -92,6 +92,7 @@ class Hub:
         router._cancel_reason = self.router._cancel_reason
         router._waiters = self.router._waiters
         router._timeouts = self.router._timeouts
+        router._backoff = self.router._backoff
         router.cancelled_jobs = self.router.cancelled_jobs
         router.pool_probe = self.router.pool_probe
         self.registry = registry

@@ -174,7 +174,9 @@ Vision: send the image exactly as OpenAI's wire format, a `data:` URL inside an
   ```
   `last` is the final vendor's own body. `budget_exhausted` is present when the hub stopped at
   its wall-clock budget (90 s) with candidates left untried, so the pool is not necessarily
-  exhausted. Retry once after `Retry-After: 30`; if that fails too, submit it as an async job
+  exhausted. The budget also cuts the attempt itself at 90 s plus 15 s: a CLI model whose
+  answers take longer (agy vision reads run 60-140 s) never answers a synchronous call past
+  that, so send such work through `POST /jobs`. Retry once after `Retry-After: 30`; if that fails too, submit it as an async job
   instead of looping.
 - `422` - `POST /jobs` only: the request can never run. Body:
   ```json

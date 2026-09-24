@@ -10,7 +10,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from .config import Entry, Registry
-from .providers_catalog import quota_group, quota_shared
+from .providers_catalog import quota_group, quota_named_reset, quota_shared
 from .quota import QuotaTracker
 from .store import Store, parse_iso, to_iso
 from .vendor_errors import Classification
@@ -54,8 +54,17 @@ SLOT_WAIT_SHARE = 0.5
 # How far past the remaining budget one attempt may run before it is cancelled. The grace
 # covers the vendor answering just as the budget ends; past it nobody is reading the answer.
 ATTEMPT_GRACE_S = 15.0
-# Consecutive timeouts on one pair that mean the backend is dead rather than slow.
+# Consecutive timeouts on one pair that mean the backend is dead rather than slow. The pair
+# is not parked for it: the transient backoff below already lengthens with every strike, the
+# count only decides when the event feed says so.
 TIMEOUT_STRIKES = 3
+# Cooldown steps after a transient failure on one pair: a timeout, a 5xx, an overloaded
+# upstream, a CLI that crashed or printed nothing parseable, a quota refusal that names no
+# reset on a backend that always names one when a pool is really spent. Each consecutive
+# failure takes the next step, the last one repeats, and any answer resets the ladder. A
+# pair that failed once is worth asking again in half a minute; parking it to the next top
+# of the hour (what a windowless model used to get) threw away a reader's whole hour.
+TRANSIENT_BACKOFF_S: tuple[float, ...] = (30.0, 60.0, 120.0, 240.0, 300.0)
 # what `cli_backend` calls its own timeout; named here to keep the router import-free of it
 CLI_TIMEOUT_CODE = "cli_timeout"
 # Why a run was cancelled. `client_gone` is the disconnect watcher, the other one the owner.
@@ -230,6 +239,8 @@ class Router:
         # consecutive timeouts per pair: a backend that answers nothing three times running is
         # dead, not slow, and parking it is cheaper than three more caller deadlines
         self._timeouts: dict[tuple[str, str], int] = {}
+        # consecutive transient failures per pair: the index into TRANSIENT_BACKOFF_S
+        self._backoff: dict[tuple[str, str], int] = {}
         # jobs whose worker task was cancelled on purpose. A cancelled worker otherwise looks
         # exactly like a worker that died, and those are requeued rather than ended.
         self.cancelled_jobs: set[str] = set()
@@ -387,6 +398,48 @@ class Router:
     def clear_cooldown(self, model_key: str) -> None:
         for key in [k for k in self._cooldowns if k[1] == model_key]:
             self._cooldowns.pop(key, None)
+        for key in [k for k in self._backoff if k[1] == model_key]:
+            self._backoff.pop(key, None)
+
+    def next_backoff(self, entry: Entry, floor_s: float | None = None) -> float:
+        """The next step of the pair's transient ladder, in seconds; the ladder moves up one.
+
+        `floor_s` is a wait the vendor named itself: never shortened, since asking sooner only
+        buys the same refusal.
+        """
+        pair = (entry.account_id, entry.key)
+        level = self._backoff.get(pair, 0)
+        self._backoff[pair] = level + 1
+        span = TRANSIENT_BACKOFF_S[min(level, len(TRANSIENT_BACKOFF_S) - 1)]
+        if floor_s is not None and floor_s > span:
+            span = floor_s
+        return span
+
+    def transient_cooldown(
+        self, entry: Entry, floor_s: float | None = None, now: datetime | None = None
+    ) -> float:
+        """Hold the pair for the next step of its backoff ladder; returns the span in seconds."""
+        span = self.next_backoff(entry, floor_s)
+        self.set_cooldown(entry, now=now, seconds=span)
+        return span
+
+    def clear_backoff(self, entry: Entry) -> None:
+        self._backoff.pop((entry.account_id, entry.key), None)
+
+    def quota_is_transient(self, entry: Entry, classification: Classification) -> bool:
+        """A quota refusal that says nothing about when, from a backend that always says when.
+
+        agy names the reset of the bucket that binds ("Resets in 32m56s") whenever a pool is
+        really spent, and its models declare no windows. A RESOURCE_EXHAUSTED or "rate limit"
+        without that name is pacing, and the only park the hub could give it was its made-up
+        hourly window. It takes the transient ladder instead; `agy -p /quota` settles whether a
+        group is empty.
+        """
+        if classification.reset_named:
+            return False
+        if not quota_named_reset(entry.template_id):
+            return False
+        return not self.quota.specs(entry)
 
     def pool_members(self, anchor: Entry, group: str | None) -> list[Entry]:
         """Every entry that draws on the pool `anchor` draws on, `anchor` included.
@@ -475,11 +528,17 @@ class Router:
         return spread
 
     def mark_unavailable(
-        self, entry: Entry, classification: Classification, now: datetime | None = None
+        self,
+        entry: Entry,
+        classification: Classification,
+        now: datetime | None = None,
+        ttl_s: float | None = None,
     ) -> datetime:
         """Park a pair the vendor refuses to serve, for as long as the refusal is likely to hold."""
         now = now or datetime.now(UTC)
         ttl = self.not_found_ttl_s if classification.kind == "not_found" else self.unavailable_ttl_s
+        if ttl_s is not None:
+            ttl = ttl_s
         until = now + timedelta(seconds=ttl)
         self.store.mark_unavailable(
             entry.account_id,
@@ -493,29 +552,27 @@ class Router:
         return until
 
     def note_timeout(self, entry: Entry) -> bool:
-        """Count a timeout on this pair and park it once they stop looking like bad luck.
+        """Count a timeout on this pair; say so in the event feed once they stop looking like luck.
 
-        A backend that never answers costs a full caller deadline per attempt, and the pool
-        keeps handing it more callers because nothing about it looks failed. Three in a row is
-        the signal; any answer at all resets the count.
+        A backend that never answers costs a full caller deadline per attempt. The cooldown the
+        caller sets after a timeout climbs the transient ladder, so a dead backend ends up asked
+        once every five minutes. It used to be parked as `unavailable` for ten minutes on the
+        third strike, which also caught a slow model whose answers merely ran past a sync
+        caller's budget, and the 429 then pointed the caller at the next top of the hour.
         """
         pair = (entry.account_id, entry.key)
         strikes = self._timeouts.get(pair, 0) + 1
         self._timeouts[pair] = strikes
-        if strikes < TIMEOUT_STRIKES:
+        if strikes != TIMEOUT_STRIKES:
+            # once per streak: the ladder keeps climbing without a line per timeout
             return False
-        self._timeouts.pop(pair, None)
-        classification = Classification(
-            "unavailable", "timeouts", f"{strikes} consecutive timeouts, no answer from the backend"
-        )
-        until = self.mark_unavailable(entry, classification)
         self.store.add_event(
             kind="unavailable",
-            message=f"{entry.key} ({entry.account_id}) parked: {strikes} consecutive timeouts",
+            message=f"{entry.key} ({entry.account_id}): {strikes} consecutive timeouts, backing off",
             model=entry.key,
             account=entry.account_id,
         )
-        log.info("%s parked after %d timeouts until %s", entry.key, strikes, to_iso(until))
+        log.info("%s: %d consecutive timeouts, backing off", entry.key, strikes)
         return True
 
     def clear_timeouts(self, entry: Entry) -> None:
@@ -755,6 +812,16 @@ class Router:
         return [*pinned, *active, *rest[spread:]]
 
     def next_window_at(self, model_request: str, allow_paid: bool = False) -> str | None:
+        """The earliest instant any free pair of the pool can be asked again.
+
+        Per pair, the longest of whatever holds it right now - exhaustion marker, unavailable
+        park, cooldown - since a pair is usable only when all of them have lapsed. A pair held
+        by none of them waits on its windows' reset, but only if it declares windows: a
+        windowless pair (agy, `free: {}`) has no calendar, and the next top of the hour the
+        quota tracker would make up for it told a caller whose pair was on a 60 s cooldown to
+        come back in forty minutes. A windowless pair that nothing holds was turned down for
+        something time does not fix (a capability, the request size), so it names no instant.
+        """
         now = datetime.now(UTC)
         try:
             pool, _, _, _ = self.resolve_pool(model_request)
@@ -766,7 +833,19 @@ class Router:
                 continue
             if self.quota.expired_at(entry, now) is not None:
                 continue
-            resets.append(self.quota.next_reset(entry, now))
+            held = [
+                until
+                for until in (
+                    self.quota.exhausted_until(entry, now),
+                    self.unavailable_until(entry, now),
+                    self.in_cooldown(entry, now),
+                )
+                if until is not None and until > now
+            ]
+            if held:
+                resets.append(max(held))
+            elif self.quota.specs(entry):
+                resets.append(self.quota.next_reset(entry, now))
         return to_iso(min(resets)) if resets else None
 
     async def run(
@@ -817,7 +896,7 @@ class Router:
                 on_attempt(record)
 
         def give_up(entry: Entry, failure: str, code: str | None) -> None:
-            self.set_cooldown(entry)
+            self.transient_cooldown(entry)
             self.store.add_event(
                 kind="fallback",
                 message=f"{entry.key} ({entry.account_id}) failed: {code or failure}",
@@ -918,7 +997,7 @@ class Router:
                                 "attempt_timeout",
                                 int((time.monotonic() - attempt_started) * 1000),
                             )
-                            self.set_cooldown(entry)
+                            self.transient_cooldown(entry)
                             self.note_timeout(entry)
                             budget_exhausted = True
                             break
@@ -927,11 +1006,24 @@ class Router:
                             failure = exc.classification.kind
                             note(entry, failure, exc.classification.code, exc.latency_ms)
                             if failure == "quota":
+                                wait = exc.classification.retry_after_s
+                                reason = exc.classification.message or exc.classification.rule or "quota"
+                                if self.quota_is_transient(entry, exc.classification):
+                                    span = self.transient_cooldown(entry, floor_s=wait)
+                                    self.store.add_event(
+                                        kind="fallback",
+                                        message=f"{entry.key} ({entry.account_id}) quota refusal "
+                                        f"without a named reset, cooling down {span:.0f}s: {reason}"[:500],
+                                        model=entry.key,
+                                        account=entry.account_id,
+                                    )
+                                    if self.pool_probe is not None and quota_shared(entry.template_id):
+                                        # the pool's own report says whether a group is spent
+                                        self.pool_probe(entry)
+                                    break
                                 # before the marker: an observed window can change which window
                                 # the exhaustion is pinned to
                                 self.quota.record_observed(entry, exc.classification)
-                                wait = exc.classification.retry_after_s
-                                reason = exc.classification.message or exc.classification.rule or "quota"
                                 parked_until = self.quota.mark_exhausted(
                                     entry,
                                     reason,
@@ -972,8 +1064,11 @@ class Router:
                                 break
                             if failure in ("not_found", "unavailable"):
                                 # the route itself, not the request: no retry can change it, and
-                                # the pair stays out of the pool until its parking expires
-                                until = self.mark_unavailable(entry, exc.classification)
+                                # the pair stays out of the pool until its parking expires. An
+                                # upstream that is down or overloaded is transient: the park
+                                # follows the backoff ladder, not a fixed ten minutes.
+                                ttl = self.next_backoff(entry) if failure == "unavailable" else None
+                                until = self.mark_unavailable(entry, exc.classification, ttl_s=ttl)
                                 self.store.add_event(
                                     kind="unavailable",
                                     message=f"{entry.key} ({entry.account_id}) {failure} "
@@ -1029,6 +1124,7 @@ class Router:
                         else:
                             note(entry, "ok", None, int(getattr(result, "latency_ms", 0) or 0))
                             self.clear_timeouts(entry)
+                            self.clear_backoff(entry)
                             if (entry.account_id, entry.key) in self._unavailable:
                                 self.clear_unavailable(entry.key, entry.account_id)
                             hold = kind == "stream"

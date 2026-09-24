@@ -12,7 +12,7 @@ from llmhub.config import AliasDef, Entry
 from llmhub.quota import window_bounds
 from llmhub.router import AllCandidatesFailed, Router, UnknownModelError, UpstreamError
 from llmhub.runtime import Hub
-from llmhub.store import parse_iso
+from llmhub.store import parse_iso, to_iso
 from llmhub.vendor_errors import Classification, classify
 
 from .conftest import entry_of
@@ -1198,20 +1198,123 @@ async def test_cancel_where_takes_one_app_at_a_time(hub: Hub) -> None:
         await theirs
 
 
-async def test_three_timeouts_park_the_pair(hub: Hub) -> None:
+def cooldown_span(hub: Hub, entry: Entry, before: datetime) -> float:
+    until = hub.router.in_cooldown(entry, datetime.now(UTC))
+    assert until is not None
+    return (until - before).total_seconds()
+
+
+async def test_three_timeouts_climb_the_backoff_and_park_nothing(hub: Hub) -> None:
     entry = entry_of(hub, "alpha/m1", "alpha-1")
 
     async def call(candidate: Entry, attempt_no: int) -> str:
         raise UpstreamError(Classification("error", "cli_timeout", "timed out after 240s"), None)
 
+    spans = []
     for _ in range(3):
+        hub.router._cooldowns.clear()
+        before = datetime.now(UTC)
         with pytest.raises(AllCandidatesFailed):
             await hub.router.run([entry], call, budget_s=None)
+        spans.append(cooldown_span(hub, entry, before))
 
+    assert [round(span / 10) * 10 for span in spans] == [30, 60, 120]
+    # a slow backend is not parked for ten minutes any more; the event feed still says it
+    assert hub.store.unavailable_until("alpha-1", "alpha/m1", datetime.now(UTC)) is None
+    messages = [event["message"] for event in hub.store.events(20) if event["kind"] == "unavailable"]
+    assert len(messages) == 1
+    assert "3 consecutive timeouts" in messages[0]
+
+
+async def test_the_backoff_ladder_tops_out_at_five_minutes(hub: Hub) -> None:
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    spans = [hub.router.next_backoff(entry) for _ in range(7)]
+    assert spans == [30.0, 60.0, 120.0, 240.0, 300.0, 300.0, 300.0]
+    # a wait the vendor named is a floor, never shortened
+    hub.router.clear_backoff(entry)
+    assert hub.router.next_backoff(entry, floor_s=90.0) == 90.0
+    assert hub.router.next_backoff(entry, floor_s=10.0) == 60.0
+
+
+async def test_an_answer_resets_the_backoff(hub: Hub) -> None:
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    answers: list[bool] = [False, False, True, False]
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        if answers.pop(0):
+            return "served"
+        raise UpstreamError(classify(503, {"error": {"message": "overloaded"}}), 503)
+
+    spans = []
+    for _ in range(4):
+        hub.router._cooldowns.clear()
+        before = datetime.now(UTC)
+        try:
+            await hub.router.run([entry], call, budget_s=None)
+        except AllCandidatesFailed:
+            spans.append(cooldown_span(hub, entry, before))
+    # 5xx is a retry: one sleep, then give_up takes a step; the ok in between resets the ladder
+    assert [round(span / 10) * 10 for span in spans] == [30, 60, 30]
+
+
+async def test_an_attempt_past_the_budget_cools_the_pair_for_the_first_step(hub: Hub) -> None:
+    entry = entry_of(hub, "beta/m2", "beta-1")
+    hub.router.attempt_grace_s = 0.05
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        await asyncio.sleep(5)
+        return "late"
+
+    before = datetime.now(UTC)
+    with pytest.raises(AllCandidatesFailed) as failed:
+        await hub.router.run([entry], call, budget_s=0.05)
+    assert failed.value.budget_exhausted
+    assert 29 < cooldown_span(hub, entry, before) < 35
+    assert hub.store.unavailable_until("beta-1", "beta/m2", datetime.now(UTC)) is None
+
+
+async def test_an_upstream_that_is_down_is_parked_on_the_ladder(hub: Hub) -> None:
+    selection = hub.router.select(model_request="alpha/m1", now=NOW)
+
+    async def call(entry: Entry, attempt_no: int) -> str:
+        if entry.account_id == "alpha-1":
+            raise UpstreamError(classify(400, UNAVAILABLE_BODY, "zen"), 400)
+        return "served"
+
+    before = datetime.now(UTC)
+    await hub.router.run(selection.candidates, call)
     row = hub.store.unavailable_until("alpha-1", "alpha/m1", datetime.now(UTC))
     assert row is not None
-    assert (row["kind"], row["code"]) == ("unavailable", "timeouts")
-    assert "unavailable" in [event["kind"] for event in hub.store.events(20)]
+    assert 29 < (parse_iso(row["until_ts"]) - before).total_seconds() < 35
+
+
+def test_next_window_of_a_windowless_pair_on_cooldown_is_the_cooldown_end(hub: Hub) -> None:
+    entry = entry_of(hub, "beta/m2", "beta-1")
+    hub.router.transient_cooldown(entry)
+    until = hub.router.in_cooldown(entry, datetime.now(UTC))
+    assert until is not None
+    # used to be the next top of the hour: a windowless pair has no calendar of its own
+    assert hub.router.next_window_at("beta/m2") == to_iso(until)
+
+
+def test_next_window_of_a_windowless_pair_nothing_holds_is_none(hub: Hub) -> None:
+    assert hub.router.next_window_at("beta/m2") is None
+
+
+def test_next_window_takes_the_longest_hold_on_a_pair(hub: Hub) -> None:
+    entry = entry_of(hub, "beta/m2", "beta-1")
+    now = datetime.now(UTC)
+    hub.router.set_cooldown(entry, now=now, seconds=30)
+    hub.router.mark_unavailable(entry, Classification("unavailable", "server_error", "down"), now, ttl_s=120)
+    assert hub.router.next_window_at("beta/m2") == to_iso(now + timedelta(seconds=120))
+
+
+def test_next_window_of_a_windowed_pair_still_waits_for_its_window(hub: Hub) -> None:
+    now = datetime.now(UTC)
+    expected = min(window_bounds("hourly", "UTC", now)[1], window_bounds("daily", "UTC", now)[1])
+    entry = entry_of(hub, "alpha/m1", "alpha-1")
+    assert hub.quota.next_reset(entry, now) == expected
+    assert hub.router.next_window_at("alpha/m1") == to_iso(expected)
 
 
 async def test_an_answer_resets_the_timeout_strikes(hub: Hub) -> None:
@@ -1224,8 +1327,11 @@ async def test_an_answer_resets_the_timeout_strikes(hub: Hub) -> None:
         raise UpstreamError(Classification("error", "cli_timeout", "timed out"), None)
 
     for _ in range(5):
+        hub.router._cooldowns.clear()
         try:
             await hub.router.run([entry], call, budget_s=None)
         except AllCandidatesFailed:
             pass
     assert hub.store.unavailable_until("alpha-1", "alpha/m1", datetime.now(UTC)) is None
+    # two and two, never three in a row: no timeout streak in the event feed
+    assert not [event for event in hub.store.events(20) if "consecutive timeouts" in event["message"]]

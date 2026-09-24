@@ -965,12 +965,16 @@ PROVIDER_TEMPLATES: tuple[dict[str, Any], ...] = (
         "aliases": ["antigravity", "agy", "google antigravity"],
         "hostnames": ["antigravity.google"],
         "fields": [],
-        # the CLI says "quota"/"rate limit" without naming a window; the free plan is a daily
-        # allowance, so a scopeless quota error parks the model until midnight
+        # the scope a refusal is filed under when it names no window. It no longer decides a
+        # park: a named reset parks to that instant, anything else takes the transient
+        # backoff (quota_named_reset below)
         "quota_scope_default": "daily",
         # two logins, one pool (measured 2026-09-24): a quota park on one login parks the
         # same model on the others
         "quota_shared": True,
+        # a spent bucket is always refused with "Resets in <duration>"; a refusal without it
+        # is pacing and takes the transient backoff, not a park
+        "quota_named_reset": True,
         # the pool is per model group, not per model: `agy -p /quota` lists the groups by
         # these names, each with its own weekly and five-hour bucket. A refusal on any model
         # of a group parks every model of that group on every login. Matched by id prefix.
@@ -1239,6 +1243,15 @@ def quota_shared(template_id: str | None) -> bool:
     """True when every login of this template draws on one quota pool (agy's two accounts)."""
     known = TEMPLATES_BY_ID.get(template_id or "")
     return bool((known or {}).get("quota_shared"))
+
+
+def quota_named_reset(template_id: str | None) -> bool:
+    """True when the backend names its reset whenever a pool is really spent (agy).
+
+    A quota refusal from such a backend that names none is pacing, not a spent pool.
+    """
+    known = TEMPLATES_BY_ID.get(template_id or "")
+    return bool((known or {}).get("quota_named_reset"))
 
 
 def quota_groups(template_id: str | None) -> dict[str, tuple[str, ...]]:

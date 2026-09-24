@@ -1058,9 +1058,8 @@ async def call_cli(
                 model=entry.key,
                 account=entry.account_id,
             )
-        if classification.kind == "error":
-            # the router raises an `error` straight to the caller, so the cooldown is set here
-            hub.router.set_cooldown(entry)
+        # no cooldown here: the router's give_up sets it from the pair's backoff ladder, and a
+        # second one from this side would climb the ladder twice per failure
         raise UpstreamError(classification, None, error_body(entry, classification, run), run.latency_ms)
 
     completion = completion_from(entry, payload)

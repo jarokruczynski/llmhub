@@ -877,7 +877,8 @@ after the provider code rules, so a vendor with its own word for "overloaded" ke
 
 **Parking.** Table `unavailable(account, model, kind, code, reason, until_ts, ts)`, same shape
 and expiry-on-read semantics as `exhausted`. `not_found` -> 7 days (`LLMHUB_NOT_FOUND_TTL_S`),
-`unavailable` -> 10 minutes (`LLMHUB_UNAVAILABLE_TTL_S`). `select` rejects with reason
+`unavailable` -> 10 minutes (`LLMHUB_UNAVAILABLE_TTL_S`; since 2026-09-24 one step of the
+transient backoff instead, see v0.19; `auth` keeps the TTL). `select` rejects with reason
 `unavailable`; `entry_status` reports `down` with `"<kind>: <code> until <iso>"`, so `/v1/models`
 hides the pair like any other `down` row. A reload does not clear it; a successful call on a
 pair this process parked does, and `POST api/models/{key}/forgive` clears it on demand.
@@ -1113,11 +1114,50 @@ more than one call in flight also has a "kill N" button behind one confirm. A st
 own run is the one thing the switch cannot end: `router.run` has returned, its task is finished
 and the body belongs to Starlette, so that chip's x answers 404 and the strip says so.
 
-**Dead backends park themselves.** Three consecutive `cli_timeout` or `attempt_timeout` on one
-pair (`TIMEOUT_STRIKES`) park it as `unavailable` with code `timeouts` for the unavailable TTL
-and an event of that kind; any answer resets the count. A backend that never answers looks
-healthy to everything else in the pool, so it keeps being handed callers - three deadlines is
-enough evidence.
+**Dead backends back off.** Every `cli_timeout` or `attempt_timeout` takes a step on the
+pair's transient backoff ladder (below); the third in a row (`TIMEOUT_STRIKES`) writes an
+`unavailable` event, once per streak. Any answer resets both. Until 2026-09-24 the third strike
+parked the pair as `unavailable` / `timeouts` for ten minutes - see the next section for why
+that went.
+
+**Transient failures back off, they do not park (2026-09-24).** Measured 10:20-10:36Z on two
+WIG readers (`antigravity{,-2}/gemini-3.1-pro-high`, sync calls, tiles of 60-140 s) and an Opus
+pilot. The "502" a reader saw was the hub's own: a sync call carries the 90 s run budget, so
+each attempt was cut at 90 + 15 s grace, agy's process group killed, and the run answered 502
+`budget_exhausted`. No ok row in `usage` is longer than 104 s. The cut set the fixed 60 s
+cooldown (the reader's next tile got "429 cooldown"), and the third cut in a row parked the pair
+`unavailable` for ten minutes. The 429 `next_window_at` then ignored both holds: it read only
+the quota calendar, and agy's models declare no windows (`free: {}`), so `earliest_reset`
+fell back to an hourly window and answered the next top of the hour (11:00Z). The reader took
+that as a spent pool and stopped the sheet, while `agy -p /quota` showed the Gemini group at
+94% weekly and 71% five-hour. On the Opus side agy itself was refused ("RESOURCE_EXHAUSTED
+(code 429): Individual quota reached. ... Resets in 32m56s", in agy's own log) and kept
+retrying inside the process (4 s, 5.6 s, 12 s, 27 s ...); agy exits with that text only after
+about 150 s, so a sync caller's attempt is killed first and the hub never learns the named
+reset. Three such kills parked Opus the same way. Five minutes later Opus answered again.
+
+Now:
+- `TRANSIENT_BACKOFF_S = (30, 60, 120, 240, 300)` per (account, model), in memory, carried
+  over a reload. A timeout, a `retry` that gave up (5xx, transport), a CLI `error` (crash,
+  exit 0 with nothing parseable), and an `unavailable` upstream each take the next step; the
+  last step repeats; any ok resets the ladder. `unavailable` is still written to the table,
+  with the step as its TTL instead of ten minutes. A vendor-named wait is a floor, never
+  shortened. `not_found` (7 days) and `auth` are not transient and are unchanged.
+- The CLI backend no longer sets its own cooldown on `error`; `give_up` does, and two would
+  climb the ladder twice per failure.
+- A quota refusal from a template flagged `quota_named_reset` (agy) that names no reset, on a
+  windowless pair, is pacing: it takes the ladder (with any retry-after as the floor), writes a
+  `fallback` event and asks `PoolProbe` to read `/quota`, which parks a group that is really
+  empty. A refusal with "Resets in ..." still parks to that instant (named reset), and a
+  windowed pair still parks to its window.
+- `Router.next_window_at` takes, per free pair, the longest of exhaustion marker, `unavailable`
+  row and cooldown; a pair none of them holds answers its windows' reset only if it declares
+  windows. A windowless pair nothing holds names no instant, and a pool of only those answers
+  `null` (the job queue already treats a windowless pool as blind and uses its own backoff).
+
+Not changed: the 90 s sync budget. A call that routinely runs past it (agy vision reads,
+agy's own quota retries) belongs in `POST /jobs`, which has no budget and lets agy run to its
+own `--print-timeout`, so its "Resets in ..." reaches the hub.
 
 ## Gemini CLI - a subscription reached as a request count
 The Gemini CLI (`gemini`, npm `@google/gemini-cli`) has a headless mode, so it fits `kind: cli`

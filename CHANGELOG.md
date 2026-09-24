@@ -10,6 +10,19 @@ for the record but have no tags: those commits are not part of this repository.
 
 ## [Unreleased]
 
+### Fixed
+
+- A transient failure no longer parks a model until the next top of the hour. A timeout, a
+  5xx after the retry, a CLI crash or unparseable output, an overloaded upstream, and an agy
+  quota refusal that names no reset now cool the pair down on a backoff ladder (30 s, 60 s,
+  120 s, 240 s, then 300 s), reset by the next answer. Three timeouts in a row no longer park
+  the pair as `unavailable` for ten minutes, and `unavailable` parks follow the same ladder.
+  A named reset ("Resets in ...") and the `agy -p /quota` report still park to their instant.
+- The 429 `next_window_at` counts cooldowns and `unavailable` parks, and a model without
+  declared windows (agy, `free: {}`) no longer reports the next top of the hour: it reports
+  when its current hold ends, or nothing. Readers stopped a whole sheet on "next window
+  11:00Z" while the pool had room and the model was on a 60 s cooldown.
+
 ### Changed
 
 - Antigravity (`agy`) quota parks cover the whole model group on both logins: a refusal on

@@ -6,7 +6,7 @@ import os
 import plistlib
 import re
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +38,7 @@ from llmhub.providers_catalog import template as catalog_template
 from llmhub.router import AllCandidatesFailed
 from llmhub.runtime import Hub
 from llmhub.status import check_rows
+from llmhub.store import parse_iso
 from llmhub.vendor_errors import classify
 
 # Never the real `agy`: every test drives this stand-in, which answers the same JSON shape.
@@ -69,6 +70,14 @@ case "${AGY_MODE:-ok}" in
   quota)
     echo '{"conversation_id":"c-q","status":"ERROR","response":"You have reached your rate limit. Try again later.","usage":{"input_tokens":120,"output_tokens":0}}'
     exit 1 ;;
+  quota_reset)
+    echo '{"conversation_id":"c-r","status":"ERROR","response":"error: Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 32m56s.","usage":{"input_tokens":120,"output_tokens":0}}'
+    exit 1 ;;
+  overloaded)
+    echo 'error: UNAVAILABLE (code 503): The model is overloaded. Please try again later.' >&2
+    exit 1 ;;
+  garbled)
+    echo 'not json at all' ;;
   auth)
     echo "You are not signed in. Run agy and sign in." >&2
     exit 1 ;;
@@ -419,20 +428,67 @@ async def test_streaming_request_gets_one_chunk_and_done(cli_hub: Hub, client: h
     assert cli_hub.store.query("SELECT * FROM usage")[0]["stream"] == 1
 
 
-async def test_quota_failure_is_classified_and_parks_the_model(
+async def test_a_quota_refusal_without_a_named_reset_is_a_short_cooldown(
     cli_hub: Hub, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("AGY_MODE", "quota")
+    before = datetime.now(UTC)
     response = await client.post("/v1/chat/completions", json=BODY, headers={"X-Hub-App": "my-app"})
     assert response.status_code == 502
 
     row = cli_hub.store.query("SELECT * FROM usage")[0]
     assert row["status"] == "quota"
     assert (row["in_tokens"], row["out_tokens"]) == (120, 0)
+    # agy names the reset whenever a pool is spent; without one this is pacing, not a park
+    assert cli_hub.store.query("SELECT * FROM exhausted") == []
+    entry = cli_hub.registry.entry(MODEL, "antigravity-main")
+    assert entry is not None
+    until = cli_hub.router.in_cooldown(entry, datetime.now(UTC))
+    assert until is not None
+    assert timedelta(seconds=25) < until - before < timedelta(seconds=40)
+    # the 429 a caller gets next points at the cooldown, not at the next top of the hour
+    again = await client.post("/v1/chat/completions", json=BODY, headers={"X-Hub-App": "my-app"})
+    assert again.status_code == 429
+    assert parse_iso(again.json()["error"]["next_window_at"]) == until
+    # the scope a refusal is filed under is unchanged
+    assert classify(None, "rate limit reached", "antigravity").scope == "daily"
+
+
+async def test_a_quota_refusal_with_a_named_reset_parks_until_it(
+    cli_hub: Hub, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("AGY_MODE", "quota_reset")
+    before = datetime.now(UTC)
+    response = await client.post("/v1/chat/completions", json=BODY, headers={"X-Hub-App": "my-app"})
+    assert response.status_code == 502
+
     exhausted = cli_hub.store.query("SELECT * FROM exhausted")
     assert [(item["account"], item["model"]) for item in exhausted] == [("antigravity-main", MODEL)]
-    # a scopeless quota word from this vendor means its daily plan, not the next hour
-    assert classify(None, "rate limit reached", "antigravity").scope == "daily"
+    parked = parse_iso(exhausted[0]["until_ts"]) - before
+    assert timedelta(minutes=32, seconds=50) < parked < timedelta(minutes=33, seconds=5)
+
+
+@pytest.mark.parametrize("mode", ["overloaded", "garbled", "boom"])
+async def test_transient_cli_failures_take_the_backoff_ladder(
+    cli_hub: Hub, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, mode: str
+) -> None:
+    monkeypatch.setenv("AGY_MODE", mode)
+    entry = cli_hub.registry.entry(MODEL, "antigravity-main")
+    assert entry is not None
+    spans = []
+    for _ in range(2):
+        cli_hub.router._cooldowns.clear()
+        before = datetime.now(UTC)
+        response = await client.post("/v1/chat/completions", json=BODY, headers={"X-Hub-App": "my-app"})
+        assert response.status_code == 502
+        until = cli_hub.router.in_cooldown(entry, datetime.now(UTC))
+        assert until is not None
+        spans.append((until - before).total_seconds())
+    # 30 s, then 60 s: one step per failure, never the next top of the hour
+    assert 29 < spans[0] < 35
+    assert 59 < spans[1] < 65
+    assert cli_hub.store.query("SELECT * FROM exhausted") == []
+    assert cli_hub.store.unavailable_all() == {}
 
 
 async def test_signed_out_failure_is_auth_and_says_to_run_the_cli(
