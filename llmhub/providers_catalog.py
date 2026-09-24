@@ -975,6 +975,10 @@ PROVIDER_TEMPLATES: tuple[dict[str, Any], ...] = (
         # a spent bucket is always refused with "Resets in <duration>"; a refusal without it
         # is pacing and takes the transient backoff, not a park
         "quota_named_reset": True,
+        # a vision read takes 60-140 s, and a refusal is retried inside agy for about 150 s
+        # before it prints "Resets in ...": the default 90 s budget cut both. The attempt runs
+        # under min(budget, --print-timeout) + 15 s grace.
+        "sync_budget_s": 360,
         # the pool is per model group, not per model: `agy -p /quota` lists the groups by
         # these names, each with its own weekly and five-hour bucket. A refusal on any model
         # of a group parks every model of that group on every login. Matched by id prefix.
@@ -1243,6 +1247,13 @@ def quota_shared(template_id: str | None) -> bool:
     """True when every login of this template draws on one quota pool (agy's two accounts)."""
     known = TEMPLATES_BY_ID.get(template_id or "")
     return bool((known or {}).get("quota_shared"))
+
+
+def sync_budget_s(template_id: str | None) -> float | None:
+    """The template's own budget for a sync call, when its backend is slower than the default."""
+    known = TEMPLATES_BY_ID.get(template_id or "")
+    value = (known or {}).get("sync_budget_s")
+    return float(value) if value else None
 
 
 def quota_named_reset(template_id: str | None) -> bool:

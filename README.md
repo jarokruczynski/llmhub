@@ -167,7 +167,8 @@ one step of the transient backoff (30 s, 60 s, 120 s, 240 s, then 300 s, reset b
 answer) respectively; a bare `error` moves to the next candidate, because one vendor's
 opinion of a request is not the truth for the next one. Timeouts, 5xx after the retry and CLI
 crashes take the same backoff as a cooldown. A sync or stream call also carries a
-wall-clock budget (`LLMHUB_RUN_BUDGET_S`, 90 s) so a wide pool cannot outlive the caller.
+wall-clock budget (`LLMHUB_RUN_BUDGET_S`, 90 s) so a wide pool cannot outlive the caller; a
+provider can declare its own (`sync_budget_s`, 360 s for the antigravity template).
 
 When no eligible candidate has quota, the gateway answers `429` with
 `{"error": {"type": "no_candidates", "rejected": [...], "next_window_at": ...,

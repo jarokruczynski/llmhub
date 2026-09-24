@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
@@ -1143,6 +1144,8 @@ async def test_a_cancelled_call_kills_the_cli_process_group(
     hub.router.attempt_grace_s = 0.1
     entry = hub.registry.entry(MODEL, "antigravity-main")
     assert entry is not None
+    # the antigravity template brings its own 360 s budget; the block's value replaces it
+    entry.provider.sync_budget_s = 0.3
 
     async def call(candidate: Entry, attempt_no: int) -> Any:
         from llmhub.cli_backend import call_cli
@@ -1163,3 +1166,28 @@ async def test_a_cancelled_call_kills_the_cli_process_group(
         time.sleep(0.02)
     else:
         raise AssertionError(f"process group {pid} survived the cancellation")
+
+
+def test_the_antigravity_template_carries_a_long_sync_budget(hub: Hub, tmp_path: Path) -> None:
+    register_cli(hub, fake_cli(tmp_path), timeout_s=300)
+    entry = hub.registry.entry(MODEL, "antigravity-main")
+    assert entry is not None
+    assert entry.sync_budget_s == 360.0
+    entry.provider.sync_budget_s = 120
+    assert entry.sync_budget_s == 120.0
+
+
+async def test_a_provider_budget_outlasts_the_default_one(hub: Hub, tmp_path: Path) -> None:
+    """A CLI answer slower than the caller's default budget is served under the provider's."""
+    register_cli(hub, fake_cli(tmp_path), timeout_s=30)
+    hub.router.attempt_grace_s = 0.05
+    entry = hub.registry.entry(MODEL, "antigravity-main")
+    assert entry is not None
+    entry.provider.sync_budget_s = 2.0
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        await asyncio.sleep(0.4)
+        return "late but served"
+
+    result = await hub.router.run([entry], call, app="my-app", budget_s=0.1)
+    assert result.result == "late but served"

@@ -899,7 +899,8 @@ on output tokens per minute (OTPM): Limit N" is `too_large` on the output axis a
 **Budget.** `run(..., budget_s)`: before starting the next candidate or sleeping a retry, a run
 past its budget stops with `AllCandidatesFailed(budget_exhausted=True)`. Gateway passes
 `LLMHUB_RUN_BUDGET_S` (90 s, against a 120 s client read timeout) for sync and stream; jobs pass
-None and walk the whole pool. The first candidate always runs.
+None and walk the whole pool. The first candidate always runs. Since 2026-09-24 a provider can
+replace it with its own `sync_budget_s` (agy: 360 s), see v0.19.
 
 **400 vs 502.** Every attempt `error` and the last one carrying a real vendor HTTP status ->
 400 with that vendor body: every vendor examined the request and rejected it, and that is the
@@ -1155,9 +1156,18 @@ Now:
   windows. A windowless pair nothing holds names no instant, and a pool of only those answers
   `null` (the job queue already treats a windowless pool as blind and uses its own backoff).
 
-Not changed: the 90 s sync budget. A call that routinely runs past it (agy vision reads,
-agy's own quota retries) belongs in `POST /jobs`, which has no budget and lets agy run to its
-own `--print-timeout`, so its "Resets in ..." reaches the hub.
+**Per-provider sync budget.** The cut itself was the root cause, so the budget is now per
+provider: `sync_budget_s` on the provider block, else on its catalog template, else
+`LLMHUB_RUN_BUDGET_S` (90 s). `Router.run` applies the budget of the candidate being tried,
+counted from the start of the run, to the "start the next candidate", "sleep a retry" and
+attempt-cap checks. The antigravity template sets 360 s: a read of 60-140 s fits, and so do
+agy's ~150 s of in-process retries on a refusal, so the hub sees "Resets in ..." and parks to
+it instead of timing out. The attempt cap stays `min(remaining, --print-timeout) + 15 s`,
+which for agy (`timeout_s: 300`) is 315 s. Jobs have no budget, as before. Nothing between
+the caller and the hub cuts sooner: uvicorn has no request timeout (only the idle keep-alive),
+and the Caddy blocks for `llmhub.localhost` and `mac.local/hub/` set no timeouts, so Caddy's
+defaults (none on reads, writes or the upstream response) apply. The caller's own read
+timeout must cover the longest budget it can hit: 375 s for an explicit agy id.
 
 ## Gemini CLI - a subscription reached as a request count
 The Gemini CLI (`gemini`, npm `@google/gemini-cli`) has a headless mode, so it fits `kind: cli`

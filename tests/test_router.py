@@ -1335,3 +1335,36 @@ async def test_an_answer_resets_the_timeout_strikes(hub: Hub) -> None:
     assert hub.store.unavailable_until("alpha-1", "alpha/m1", datetime.now(UTC)) is None
     # two and two, never three in a row: no timeout streak in the event feed
     assert not [event for event in hub.store.events(20) if "consecutive timeouts" in event["message"]]
+
+
+async def test_a_provider_without_its_own_budget_keeps_the_default(hub: Hub) -> None:
+    entry = entry_of(hub, "beta/m2", "beta-1")
+    assert entry.sync_budget_s is None
+    hub.router.attempt_grace_s = 0.05
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        await asyncio.sleep(0.4)
+        return "late"
+
+    with pytest.raises(AllCandidatesFailed) as failed:
+        await hub.router.run([entry], call, budget_s=0.1)
+    assert failed.value.budget_exhausted
+    assert [item["error_code"] for item in failed.value.attempts] == ["attempt_timeout"]
+
+
+async def test_the_budget_follows_the_candidate_being_tried(hub: Hub) -> None:
+    fast = entry_of(hub, "beta/m2", "beta-1")
+    slow = entry_of(hub, "alpha/m1", "alpha-1")
+    slow.provider.sync_budget_s = 2.0
+    hub.router.attempt_grace_s = 0.05
+
+    async def call(candidate: Entry, attempt_no: int) -> str:
+        if candidate is fast:
+            raise UpstreamError(classify(503, {"error": {"message": "down"}}), 503)
+        await asyncio.sleep(0.4)
+        return "served"
+
+    # the first candidate spends the default budget; the second has its own and still runs
+    hub.router.retry_delays = ()
+    result = await hub.router.run([fast, slow], call, budget_s=0.1)
+    assert result.entry is slow

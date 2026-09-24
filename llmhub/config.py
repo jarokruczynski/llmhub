@@ -12,6 +12,8 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .providers_catalog import sync_budget_s as template_sync_budget_s
+
 log = logging.getLogger(__name__)
 
 WINDOW_NAMES = ("hourly", "daily", "monthly", "allowance")
@@ -142,6 +144,9 @@ class ProviderDef(BaseModel):
     extra_args: list[str] = Field(default_factory=list)
     concurrency: int | None = None
     timeout_s: float | None = None
+    # Wall-clock budget of a sync or stream call while this provider serves it, replacing
+    # LLMHUB_RUN_BUDGET_S. Unset: the template's `sync_budget_s`, else the global default.
+    sync_budget_s: float | None = None
     workdir: str | None = None
     env_passthrough: list[str] = Field(default_factory=lambda: list(CLI_DEFAULT_ENV_PASSTHROUGH))
     # Values set outright for the child, not copied from the hub's own environment, applied
@@ -266,6 +271,14 @@ class Entry:
     def cli_timeout_s(self) -> float:
         value = self.provider.timeout_s
         return float(value) if value and value > 0 else CLI_DEFAULT_TIMEOUT_S
+
+    @property
+    def sync_budget_s(self) -> float | None:
+        """This provider's own sync budget: the block's value, else its template's, else None."""
+        value = self.provider.sync_budget_s
+        if value is None:
+            value = template_sync_budget_s(self.template_id)
+        return float(value) if value is not None and value > 0 else None
 
     @property
     def cli_workdir(self) -> Path:

@@ -173,10 +173,12 @@ Vision: send the image exactly as OpenAI's wire format, a `data:` URL inside an
              "last": {"error": {"message": "..."}}, "budget_exhausted": true}}
   ```
   `last` is the final vendor's own body. `budget_exhausted` is present when the hub stopped at
-  its wall-clock budget (90 s) with candidates left untried, so the pool is not necessarily
-  exhausted. The budget also cuts the attempt itself at 90 s plus 15 s: a CLI model whose
-  answers take longer (agy vision reads run 60-140 s) never answers a synchronous call past
-  that, so send such work through `POST /jobs`. Retry once after `Retry-After: 30`; if that fails too, submit it as an async job
+  its wall-clock budget with candidates left untried, so the pool is not necessarily
+  exhausted. The budget depends on the provider serving the call: 90 s by default, 360 s for
+  the antigravity (`agy`) models, whose reads run 60-140 s. It also cuts the attempt itself
+  at the budget plus 15 s, so a client calling an agy model synchronously needs a read timeout
+  of at least 375 s (300 s covers any agy answer that is not a cut). Work longer than that
+  goes through `POST /jobs`. Retry once after `Retry-After: 30`; if that fails too, submit it as an async job
   instead of looping.
 - `422` - `POST /jobs` only: the request can never run. Body:
   ```json

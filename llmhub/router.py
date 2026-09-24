@@ -877,10 +877,24 @@ class Router:
         budget_exhausted = False
         error_providers: set[str] = set()
 
-        def over_budget(planned_sleep: float = 0.0) -> bool:
+        def budget_for(entry: Entry) -> float | None:
+            """The caller's budget as it applies to this candidate.
+
+            A provider may declare its own (`sync_budget_s`): agy reads run 60-140 s and agy
+            retries a refusal inside the process for about 150 s before it prints the reset,
+            so the default 90 s cut every long answer and hid every named reset. It is counted
+            from the start of the run, like the default. A job has no budget, whoever serves it.
+            """
             if budget_s is None:
+                return None
+            own = entry.sync_budget_s
+            return own if own is not None else budget_s
+
+        def over_budget(entry: Entry, planned_sleep: float = 0.0) -> bool:
+            budget = budget_for(entry)
+            if budget is None:
                 return False
-            return (time.monotonic() - started) + planned_sleep > budget_s
+            return (time.monotonic() - started) + planned_sleep > budget
 
         def note(entry: Entry, status: str, error_code: str | None, latency_ms: int) -> None:
             record = {
@@ -904,10 +918,11 @@ class Router:
                 account=entry.account_id,
             )
 
-        def remaining_budget() -> float | None:
-            if budget_s is None:
+        def remaining_budget(entry: Entry) -> float | None:
+            budget = budget_for(entry)
+            if budget is None:
                 return None
-            return budget_s - (time.monotonic() - started)
+            return budget - (time.monotonic() - started)
 
         def attempt_cap(entry: Entry) -> float | None:
             """How long one attempt may run: the shorter of the caller's deadline and the
@@ -917,7 +932,7 @@ class Router:
             is what keeps the two from racing: a backend that stops itself gets to say why it
             stopped, which is worth more than the second it costs.
             """
-            remaining = remaining_budget()
+            remaining = remaining_budget(entry)
             if remaining is None:
                 return None
             bound = vendor_bound_s(entry)
@@ -942,7 +957,7 @@ class Router:
             for entry in candidates:
                 # the first candidate always runs: a budget shorter than one call would turn
                 # every request into a 502 without ever asking a vendor
-                if attempts and over_budget():
+                if attempts and over_budget(entry):
                     budget_exhausted = True
                     break
                 # the pool is walked in preference order, so a request the first dozen pairs
@@ -964,7 +979,7 @@ class Router:
                         continue
                     queued = semaphore.locked()
                     waited = time.monotonic()
-                    remaining = remaining_budget()
+                    remaining = remaining_budget(entry)
                     if not await self._acquire_slot(
                         semaphore, entry, None if remaining is None else remaining * SLOT_WAIT_SHARE
                     ):
@@ -974,7 +989,7 @@ class Router:
                     # a run that actually queued for this slot may have lost its deadline while
                     # standing in line: hand the slot on rather than call for nobody. A slot
                     # that was free is not re-checked - the first candidate always runs.
-                    if queued and over_budget():
+                    if queued and over_budget(entry):
                         budget_exhausted = True
                         break
                     for index in range(len(self.retry_delays) + 1):
@@ -1087,7 +1102,7 @@ class Router:
                                     break
                                 if index < len(self.retry_delays):
                                     delay = wait if wait is not None else self.retry_delays[index]
-                                    if over_budget(delay):
+                                    if over_budget(entry, delay):
                                         budget_exhausted = True
                                         break
                                     await self.sleep(delay)

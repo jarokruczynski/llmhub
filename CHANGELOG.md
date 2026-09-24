@@ -10,6 +10,13 @@ for the record but have no tags: those commits are not part of this repository.
 
 ## [Unreleased]
 
+### Added
+
+- Per-provider sync budget: `sync_budget_s` on a provider block or its catalog template
+  replaces `LLMHUB_RUN_BUDGET_S` (90 s) while that provider serves a sync or stream call.
+  The antigravity template sets 360 s, so a 60-140 s read is no longer cut at 105 s and agy's
+  in-process quota retries end in a named reset the hub can park on, not in a timeout.
+
 ### Fixed
 
 - A transient failure no longer parks a model until the next top of the hour. A timeout, a
