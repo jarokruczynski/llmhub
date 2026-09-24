@@ -12,9 +12,9 @@
     "operation not permitted".
 
     Environment therefore comes from this dict, not from ~/.zprofile; the gateway sources
-    provider keys itself from ~/.llmhub/env/*.env (or the legacy ~/.detektor if that is
-    the only one present). Set LLMHUB_ENV_DIR before running install.sh to override the
-    directory in this plist too. Dependencies are synced by install.sh.
+    provider keys itself from ~/.llmhub/env/*.env. Set LLMHUB_ENV_DIR before running
+    install.sh to point this plist at a different directory. Dependencies are synced by
+    install.sh.
 -->
 <plist version="1.0">
 <dict>

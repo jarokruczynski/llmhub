@@ -10,6 +10,12 @@ for the record but have no tags: those commits are not part of this repository.
 
 ## [Unreleased]
 
+### Removed
+
+- The fallback to the key directory used before `~/.llmhub/env` was the default. Provider
+  keys are read from `LLMHUB_ENV_DIR`, or `~/.llmhub/env` when it is unset; an install that
+  still keeps its `*.env` files elsewhere moves them there or sets `LLMHUB_ENV_DIR`.
+
 ## [0.6.0] - 2026-09-24
 
 ### Added

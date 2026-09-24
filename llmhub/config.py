@@ -18,8 +18,6 @@ WINDOW_NAMES = ("hourly", "daily", "monthly", "allowance")
 RESETTING_WINDOWS = ("hourly", "daily", "monthly")
 DEFAULT_HOME = Path.home() / ".llmhub"
 DEFAULT_ENV_DIR = DEFAULT_HOME / "env"
-# pre-1.0 default, kept only as a fallback for installs that predate DEFAULT_ENV_DIR
-LEGACY_ENV_DIR = Path.home() / ".detektor"
 
 # Providers that are a local agent CLI instead of an HTTP endpoint: no base_url, no key, the
 # login lives in the CLI's own config. See cli_backend.py.
@@ -343,26 +341,10 @@ def _non_negative_int(env: dict[str, str], name: str, default: int) -> int:
 
 
 def _resolve_env_dir(env: dict[str, str]) -> Path:
-    """Directory scanned for provider key files (`*.env`).
-
-    LLMHUB_ENV_DIR always wins. Otherwise this is DEFAULT_ENV_DIR; an install that
-    predates that default falls back to LEGACY_ENV_DIR when that is the only one that
-    exists, with a one-time warning telling the operator to either move the files or
-    set LLMHUB_ENV_DIR to keep using the old location on purpose.
-    """
+    """Directory scanned for provider key files (`*.env`): LLMHUB_ENV_DIR, else DEFAULT_ENV_DIR."""
     override = env.get("LLMHUB_ENV_DIR")
     if override:
         return Path(override)
-    if not DEFAULT_ENV_DIR.is_dir() and LEGACY_ENV_DIR.is_dir():
-        log.warning(
-            "env dir %s not found, using legacy %s; move its *.env files to %s or "
-            "set LLMHUB_ENV_DIR=%s to keep this location",
-            DEFAULT_ENV_DIR,
-            LEGACY_ENV_DIR,
-            DEFAULT_ENV_DIR,
-            LEGACY_ENV_DIR,
-        )
-        return LEGACY_ENV_DIR
     return DEFAULT_ENV_DIR
 
 

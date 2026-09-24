@@ -18,7 +18,7 @@ dry.
   `http://<host>.local/hub/` (LAN, path prefix stripped by Caddy `handle_path`) -> dashboard
   must use RELATIVE urls only (no leading "/"), so it works under a prefix.
 - LaunchAgent `com.llmhub.gateway` (launchd/install.sh), logs `~/Library/Logs/llmhub/`.
-- Keys: env vars only, loaded from `~/.app-a/*.env` (KEY=value, chmod 600). The hub reads
+- Keys: env vars only, loaded from `~/.llmhub/env/*.env` (KEY=value, chmod 600). The hub reads
   the variable NAMES from the registry; never store key values in repo, db or logs.
 - CLI: `python -m llmhub check` prints the registry/quota state table (account, model, key
   present, status, windows used/limit, exhausted-until) and exits - no network calls, no
@@ -295,7 +295,7 @@ OCR-batch apps' client migration
 
 ## Accounts and keys from the dashboard (v0.2)
 Adding a provider account must not require editing files by hand. Storage stays the
-owner's convention: key value in `~/.app-a/<provider>.env` as `<ENV_NAME>=<value>`
+owner's convention: key value in `~/.llmhub/env/<provider>.env` as `<ENV_NAME>=<value>`
 (chmod 600, file created or the line replaced in place), registry entry in
 `~/.llmhub/providers.yaml`. The hub reloads both in-process after a write; no restart.
 The key value is write-only: never returned, logged, or stored in the db.
