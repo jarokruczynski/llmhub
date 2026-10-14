@@ -1532,7 +1532,13 @@
       });
       if (res.ok) {
         const json = await res.json();
-        notify(`Test successful! Latency: ${json.latency_ms} ms (${json.status})`, 'success');
+        // the probe answers 200 whatever the vendor said; `ok` is the verdict
+        if (json.ok) {
+          notify(`Test successful! Latency: ${json.latency_ms} ms (${json.status})`, 'success');
+        } else {
+          notify(`Test failed on ${json.model || model}: ${probeFailure(json)}`, 'error');
+        }
+        loadStatus();
       } else {
         const err = await res.json().catch(() => ({}));
         notify(`Test failed: ${err.detail || res.statusText}`, 'error');
@@ -1912,7 +1918,62 @@
     const ready = rows.filter((m) => m.status === 'ok').length;
     const accounts = rows.length > 1 ? ` on any of its ${rows.length} accounts` : '';
     const state_ = ready ? `${ready} of ${rows.length} ready now.` : `<b>Not ready now</b> (${escapeHtml(rows.map((m) => m.status).join(', '))}): the call will most likely fail.`;
-    help.innerHTML = `Only <code>${escapeHtml(target)}</code>${accounts}, with no fallback to other models. ${state_}`;
+    // "ok" is the hub's books, not a probe: nothing it knows of blocks the pair. Whether the
+    // vendor actually answered lately is separate evidence, and a pair that never did is a guess.
+    const lastOk = rows.map((m) => m.last_ok_at).filter(Boolean).sort().pop();
+    const lastErr = rows.map((m) => m.last_error_at).filter(Boolean).sort().pop();
+    let evidence;
+    if (lastOk && (!lastErr || lastOk >= lastErr)) {
+      evidence = `Last answered ${escapeHtml(timeAgo(lastOk))}.`;
+    } else if (lastErr) {
+      const row = rows.find((m) => m.last_error_at === lastErr) || {};
+      evidence = `<b>Last call failed</b> ${escapeHtml(timeAgo(lastErr))}: ${escapeHtml(row.last_error || 'error')}.`;
+    } else {
+      evidence = '<b>Never called yet</b>: "ok" only means nothing the hub knows of blocks it; the first call is the test.';
+    }
+    help.innerHTML = `Only <code>${escapeHtml(target)}</code>${accounts}, with no fallback to other models. ${state_} ${evidence}`;
+  }
+
+  // The last vendor body the hub passed back, as one line: a message when the vendor sent one
+  // in the usual shape, the raw text otherwise.
+  function vendorWords(last) {
+    if (last == null || last === '') return '';
+    if (typeof last === 'string') return last.slice(0, 300);
+    const error = last.error;
+    if (typeof error === 'string') return error.slice(0, 300);
+    const message = (error && typeof error === 'object' && error.message) || last.message || last.detail;
+    if (typeof message === 'string') return message.slice(0, 300);
+    try { return JSON.stringify(last).slice(0, 300); } catch (e) { return String(last); }
+  }
+
+  // "all candidates failed" alone says nothing a reader can act on. The hub's error bodies
+  // carry the attempt list, the rejected rows and the last vendor's own words; this is them.
+  function describeHubError(status, errJson) {
+    const error = errJson?.error;
+    if (!error || typeof error !== 'object') {
+      return errJson?.detail || `HTTP ${status}`;
+    }
+    const lines = [error.message || `HTTP ${status}`];
+    if (Array.isArray(error.attempts) && error.attempts.length) {
+      lines.push('Attempts:');
+      for (const a of error.attempts) {
+        const code = a.error_code ? ` (${a.error_code})` : '';
+        const took = a.latency_ms ? `, ${secondsOf(a.latency_ms)}` : '';
+        lines.push(`  ${a.model} [${a.account}]: ${a.status}${code}${took}`);
+      }
+    }
+    if (Array.isArray(error.rejected) && error.rejected.length) {
+      lines.push('Rejected before any call:');
+      for (const r of error.rejected) {
+        const detail = r.detail != null && r.detail !== '' ? ` ${typeof r.detail === 'object' ? JSON.stringify(r.detail) : r.detail}` : '';
+        lines.push(`  ${r.model} [${r.account}]: ${r.reason}${detail}`);
+      }
+    }
+    const words = vendorWords(error.last);
+    if (words) lines.push(`Vendor said: ${words}`);
+    if (error.budget_exhausted) lines.push('The run hit its time budget before the pool was walked to the end.');
+    if (error.next_window_at) lines.push(`Next window opens at ${error.next_window_at}.`);
+    return lines.join('\n');
   }
 
   function describePlaygroundSettings() {
@@ -2013,7 +2074,7 @@
 
       if (!res.ok) {
         const errJson = await res.json().catch(() => ({}));
-        throw new Error(errJson?.error?.message || errJson?.detail || `HTTP ${res.status}: ${res.statusText}`);
+        throw new Error(describeHubError(`${res.status}: ${res.statusText}`, errJson));
       }
 
       if (!isStream) {
@@ -2097,7 +2158,8 @@
       if (err.name === 'AbortError') {
         streamContent.textContent += '\n[Request cancelled by user]';
       } else {
-        streamContent.innerHTML = `<span style="color:var(--status-depleted); font-weight:600">Error: ${escapeHtml(err.message)}</span>`;
+        // multi-line: the attempt list and the vendor's words keep their line breaks
+        streamContent.innerHTML = `<span style="color:var(--status-depleted); font-weight:600; white-space:pre-wrap">Error: ${escapeHtml(err.message)}</span>`;
       }
     } finally {
       assistantMsg.classList.remove('streaming-cursor');
@@ -2297,13 +2359,29 @@
     });
     if (res.ok) {
       const json = await res.json();
-      notify(`Connection OK! Model: ${json.model}, latency: ${json.latency_ms} ms`, 'success');
+      if (json.ok) {
+        notify(`Connection OK! Model: ${json.model}, latency: ${json.latency_ms} ms`, 'success');
+      } else {
+        notify(`Test failed on ${json.model || provider}: ${probeFailure(json)}`, 'error');
+      }
       loadStatus();
     } else {
       const err = await res.json().catch(() => ({}));
       notify(`Test failed: ${err.detail || res.statusText}`, 'error');
     }
   };
+
+  // What a failed probe said, in one line: the hub's classification, the vendor's code and
+  // its own words when it sent any.
+  function probeFailure(json) {
+    const parts = [json.status || 'error'];
+    if (json.error_code) parts.push(`(${json.error_code})`);
+    if (json.http_status) parts.push(`HTTP ${json.http_status}`);
+    if (json.status === 'no_key' && json.api_key_env) parts.push(`- ${json.api_key_env} is not set`);
+    const words = vendorWords(json.error);
+    if (words) parts.push(`- ${words}`);
+    return parts.join(' ');
+  }
 
   window.discoverAccount = async function (provider, account) {
     notify(`Discovering models for ${provider}...`, 'info');

@@ -19,6 +19,13 @@ for the record but have no tags: those commits are not part of this repository.
 
 ### Fixed
 
+- The playground's error bubble names the cause instead of "all candidates failed" alone:
+  the attempt list (model, account, the hub's classification and the vendor's error code),
+  the rows rejected before any call, the last vendor body's own words, and the next window
+  when there is one. The per-model and per-account "Test" buttons now read the probe's `ok`
+  verdict: a probe the vendor refused reported "Test successful" because the endpoint
+  answers 200 either way. The playground's model help also says when the pair last answered
+  or last failed, and that an "ok" never called is the hub's books, not a probe.
 - A transient failure no longer parks a model until the next top of the hour. A timeout, a
   5xx after the retry, a CLI crash or unparseable output, an overloaded upstream, and an agy
   quota refusal that names no reset now cool the pair down on a backoff ladder (30 s, 60 s,
