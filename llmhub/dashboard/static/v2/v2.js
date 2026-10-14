@@ -1155,6 +1155,7 @@
     const ready = models.filter(m => m.status === 'ok').length;
     const cooldown = models.filter(m => m.status === 'cooldown').length;
     const exhausted = models.filter(m => m.status === 'exhausted').length;
+    const unverified = models.filter(m => m.status === 'unverified').length;
     const disabled = models.filter(m => m.disabled).length;
 
     const reqsToday = models.reduce((acc, m) => acc + (m.usage_today?.requests || 0), 0);
@@ -1170,6 +1171,7 @@
           <div class="kpi-sub">
             <span style="color:var(--status-cooldown)">${cooldown} cooldown</span> •
             <span style="color:var(--status-depleted)">${exhausted} exhausted</span> •
+            <span title="never answered yet: the health sweep probes these first">${unverified} unverified</span> •
             <span>${disabled} disabled</span>
           </div>
         </div>
@@ -1288,6 +1290,7 @@
     let filtered = models.filter(m => {
       if (filter.status !== 'all') {
         if (filter.status === 'ready' && m.status !== 'ok') return false;
+        if (filter.status === 'unverified' && m.status !== 'unverified') return false;
         if (filter.status === 'cooldown' && m.status !== 'cooldown') return false;
         if (filter.status === 'exhausted' && m.status !== 'exhausted') return false;
         if (filter.status === 'disabled' && !m.disabled) return false;
@@ -1613,7 +1616,7 @@
             ${preferList.slice(0, 6).map((pref, idx) => {
               const matched = models.find(m => m.key === pref);
               const status = matched ? matched.status : 'not registered';
-              const dotColor = status === 'ok' ? 'var(--status-ready)' : status === 'cooldown' ? 'var(--status-cooldown)' : 'var(--status-depleted)';
+              const dotColor = status === 'ok' ? 'var(--status-ready)' : status === 'cooldown' ? 'var(--status-cooldown)' : status === 'unverified' ? 'var(--status-disabled)' : 'var(--status-depleted)';
               return `
                 <div class="candidate-item">
                   <span><strong style="color:var(--text-muted)">#${idx + 1}</strong> ${escapeHtml(pref)}</span>
@@ -1877,7 +1880,8 @@
       const seen = byKey.get(m.key);
       if (!seen || (seen.status !== 'ok' && m.status === 'ok')) byKey.set(m.key, m);
     }
-    const models = [...byKey.values()].sort((a, b) => (a.status === 'ok' ? 0 : 1) - (b.status === 'ok' ? 0 : 1) || a.key.localeCompare(b.key));
+    const rank = (m) => (m.status === 'ok' ? 0 : m.status === 'unverified' ? 1 : 2);
+    const models = [...byKey.values()].sort((a, b) => rank(a) - rank(b) || a.key.localeCompare(b.key));
     const modelGroup = document.createElement('optgroup');
     modelGroup.label = 'One specific model - no fallback';
     models.forEach(m => {
@@ -1916,22 +1920,28 @@
       return;
     }
     const ready = rows.filter((m) => m.status === 'ok').length;
+    const unverified = rows.filter((m) => m.status === 'unverified').length;
     const accounts = rows.length > 1 ? ` on any of its ${rows.length} accounts` : '';
-    const state_ = ready ? `${ready} of ${rows.length} ready now.` : `<b>Not ready now</b> (${escapeHtml(rows.map((m) => m.status).join(', '))}): the call will most likely fail.`;
-    // "ok" is the hub's books, not a probe: nothing it knows of blocks the pair. Whether the
-    // vendor actually answered lately is separate evidence, and a pair that never did is a guess.
+    let state_;
+    if (ready) {
+      state_ = `${ready} of ${rows.length} ready now.`;
+    } else if (unverified) {
+      // "ok" is an answer on record; this pair has none, so the hub has not tried it or it
+      // has not answered. The health sweep probes it on its own; this call would test it too.
+      state_ = `<b>Unverified</b>: no answer from this pair on record yet, so the hub cannot promise it works. The health sweep probes it; sending now tests it as well.`;
+    } else {
+      state_ = `<b>Not ready now</b> (${escapeHtml(rows.map((m) => m.status).join(', '))}): the call will most likely fail.`;
+    }
     const lastOk = rows.map((m) => m.last_ok_at).filter(Boolean).sort().pop();
     const lastErr = rows.map((m) => m.last_error_at).filter(Boolean).sort().pop();
-    let evidence;
+    let evidence = '';
     if (lastOk && (!lastErr || lastOk >= lastErr)) {
-      evidence = `Last answered ${escapeHtml(timeAgo(lastOk))}.`;
+      evidence = ` Last answered ${escapeHtml(timeAgo(lastOk))}.`;
     } else if (lastErr) {
       const row = rows.find((m) => m.last_error_at === lastErr) || {};
-      evidence = `<b>Last call failed</b> ${escapeHtml(timeAgo(lastErr))}: ${escapeHtml(row.last_error || 'error')}.`;
-    } else {
-      evidence = '<b>Never called yet</b>: "ok" only means nothing the hub knows of blocks it; the first call is the test.';
+      evidence = ` <b>Last call failed</b> ${escapeHtml(timeAgo(lastErr))}: ${escapeHtml(row.last_error || 'error')}.`;
     }
-    help.innerHTML = `Only <code>${escapeHtml(target)}</code>${accounts}, with no fallback to other models. ${state_} ${evidence}`;
+    help.innerHTML = `Only <code>${escapeHtml(target)}</code>${accounts}, with no fallback to other models. ${state_}${evidence}`;
   }
 
   // The last vendor body the hub passed back, as one line: a message when the vendor sent one

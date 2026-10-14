@@ -192,6 +192,30 @@ def _models() -> list[dict[str, Any]]:
             },
         },
         {
+            # added to the yaml an hour ago and never called: nothing blocks it, nothing proves
+            # it. The health sweep probes it; until then the badge says so instead of "ok".
+            "key": "gemini/gemini-3.8-pro-preview",
+            "provider": "gemini",
+            "account": "gemini-main",
+            "model": "gemini-3.8-pro-preview",
+            "caps": ["text", "vision", "tools", "json", "reasoning"],
+            "status": "unverified",
+            "reason": "never answered yet",
+            "windows": {"hourly": None, "daily": None, "monthly": None},
+            "last_error": None,
+            "last_error_at": None,
+            "last_ok_at": None,
+            "avg_latency_ms": None,
+            "usage_today": {
+                "requests": 0,
+                "in_tokens": 0,
+                "out_tokens": 0,
+                "errors": 0,
+                "last_used_at": None,
+            },
+            "observed": {},
+        },
+        {
             "key": "dashscope/qwen3.7-plus",
             "provider": "dashscope",
             "account": "dashscope-main",

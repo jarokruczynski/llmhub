@@ -288,6 +288,16 @@ banner only when the badge is not `ok`; past the window it stays on the card as 
 pairs showed a green badge above a red quota banner, most of them pairs nothing had retried
 since the refusal.
 
+`ok` is reserved for a pair with an answer on record. A pair nothing blocks but nothing has
+ever answered on - no usage row with status `ok`, ever - reports `unverified` ("never answered
+yet"). Before this, a model added to the yaml with a typo in its id, or one the plan does not
+include, sat as a green `ok` until something called it and got "all candidates failed"; the
+playground's model list said ready, the hub's books said nothing, and nobody had asked the
+vendor. The router still tries an unverified pair (the call is what verifies it), the scout's
+`curate_prefer` takes one only when no `ok` pair is on its list, and the health sweep probes
+them first (below). One answer verifies the pair for good; a probe that fails leaves it
+`warning` for the window and `unverified` after.
+
 ## Out of scope v0
 Promo hunter automation, claude-code lane implementation, the transcript-extraction and
 OCR-batch apps' client migration
@@ -1371,6 +1381,20 @@ What is left is at most one probe per idle account per window, one account at a 
 is bounded by `PROBE_TIMEOUT_S` (60 s) and a backend that does not answer inside it is recorded
 as a `timeout` and the sweep moves on; without that, one CLI backend on its own 600 s print
 timeout stretches the whole run.
+
+The sweep asks a second question, per model rather than per account: **does a pair the hub has
+never had an answer from work at all**. Traffic on a sibling model proves the key, not the
+model, so `recently_served` does not cover it. Every eligible free pair with no `ok` row on
+record is probed whatever its account's traffic (`purpose: verify` in the results, next to the
+`liveness` probes); an unverified pair's probe also stands in for the account's liveness probe.
+The cost is one request per model, once: an answer verifies the pair for good and its own usage
+rows take over. A pair that keeps failing is asked again once per window, which is also how it
+recovers. A **verification pass** (`verify_once`: the same function with `liveness=False`,
+no sweep row, an event only when it probed something) runs on its own when the service starts
+and whenever `request_verify` is called, which `reload_counts` does after every registry
+reload - so a model added to the yaml or through the dashboard is a guess for seconds, not
+until the next scheduled sweep. The pass does not touch the sweep clock, so a restart still
+neither re-probes idle accounts nor postpones the schedule.
 
 `POST api/health/sweep` is the manual button and passes a zero window, so it probes every
 eligible account: someone asking for a check now means all of them. The schedule passes the

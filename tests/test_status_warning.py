@@ -50,9 +50,33 @@ def test_a_later_success_retires_the_refusal(hub: Hub) -> None:
 
 def test_a_refusal_older_than_the_window_stops_counting(hub: Hub) -> None:
     now = datetime.now(UTC)
+    record(hub, status="ok", when=now - timedelta(days=4))
     record(hub, status="error", when=now - timedelta(days=3), error_code="insufficient_quota")
 
     assert status_of(hub, now)[0] == "ok"
+
+
+def test_a_pair_nothing_has_ever_answered_on_is_unverified_not_ok(hub: Hub) -> None:
+    status, reason = status_of(hub, datetime.now(UTC))
+
+    assert status == "unverified"
+    assert reason == "never answered yet"
+
+
+def test_one_answer_verifies_the_pair(hub: Hub) -> None:
+    now = datetime.now(UTC)
+    record(hub, status="ok", when=now - timedelta(days=20))
+
+    assert status_of(hub, now)[0] == "ok"
+
+
+def test_a_refusal_that_ages_out_leaves_an_unanswered_pair_unverified(hub: Hub) -> None:
+    """A pair that failed its only probe is a warning for the window, then a guess again."""
+    now = datetime.now(UTC)
+    record(hub, status="error", when=now - timedelta(days=3), error_code="model_not_found")
+
+    assert status_of(hub, now)[0] == "unverified"
+    assert status_of(hub, now - timedelta(days=3) + timedelta(hours=1))[0] == "warning"
 
 
 def test_the_model_row_carries_the_warning_and_its_reason(hub: Hub) -> None:

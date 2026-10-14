@@ -442,7 +442,10 @@ headers sort on click without dropping an active filter.
   was. A failure is shown only while it is the newest thing on record - a later success retires
   it. Per row: forgive a cooldown, probe the pair, disable or re-enable it. A refusal older than
   the hub's recent-failure window (6 h) no longer counts against the badge and stays on the card
-  as muted history.
+  as muted history. `ok` means the pair has answered at least once and nothing since says
+  otherwise; a pair nothing has ever answered on is `unverified`, and the health sweep probes
+  those on its own - at startup, after a registry reload and on every scheduled sweep - so the
+  ready count is a count of models that actually work.
 - **Routing & Matrix** - the routing aliases, which are the profiles a client asks for by name
   (`"model": "auto"`): a preference order plus a spread that decides how widely the traffic is
   fanned out. Editable here, validated against the live registry, and a simulator that shows
@@ -515,6 +518,7 @@ Environment variables:
 | `LLMHUB_QUEUE_MAX_PER_APP` | live jobs one app may hold before 429 `queue_full` | `200` |
 | `LLMHUB_JOB_RETENTION_DAYS` | how long finished job rows are kept | `7` |
 | `LLMHUB_PROBE_TIMEOUT_S` | per-probe deadline when a model is being tried | `60` |
+| `LLMHUB_HEALTH_SWEEP_EVERY_H` | hours between health sweeps (idle accounts, unverified models), `0` = off | `6` |
 | `LLMHUB_SCOUT_AT` | daily scout run, local `HH:MM`, empty = off | `08:00` |
 | `LLMHUB_SCOUT_SOURCES` | path to `scout_sources.yaml` | `$LLMHUB_HOME/scout_sources.yaml` |
 | `LLMHUB_BASE_URL` | hub endpoint the scout calls for its own LLM work | `http://127.0.0.1:8800/v1` |

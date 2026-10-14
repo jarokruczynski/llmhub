@@ -12,6 +12,9 @@ from .store import LIVE_JOB_STATES, parse_iso, to_iso
 # Long enough to outlive an hourly window, short enough that a failure nothing has retried
 # since stops shouting after a while.
 RECENT_FAILURE_H = 6
+# A pair nothing blocks but nothing has ever answered on. Not "ok": that word is reserved for a
+# pair the vendor has actually served, so the ready count on the dashboard means what it says.
+UNVERIFIED = "unverified"
 
 
 def entry_status(
@@ -51,11 +54,17 @@ def entry_status(
         return "cooldown", to_iso(cooldown)
     if not entry_has_room(hub, entry, now, room):
         return "exhausted", "window_limit"
-    failed = recent_failure(hub, entry, now, stats)
+    row = stats if stats is not None else hub.store.model_stats(entry.account_id, entry.key)
+    failed = recent_failure(hub, entry, now, row)
     if failed is not None:
         # Nothing in our own books blocks this pair, but the last thing the vendor said was no.
         # Reporting that as "ok" is how a card ends up green next to a refusal it cannot explain.
         return "warning", failed
+    if not row.get("last_ok_at"):
+        # Nothing blocks it and nothing has proven it either: no call on this pair has ever
+        # come back. "ok" here would be the hub's books standing in for a vendor that may
+        # not know the model at all. The health sweep probes these first.
+        return UNVERIFIED, "never answered yet"
     return "ok", None
 
 
