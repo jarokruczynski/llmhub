@@ -1377,6 +1377,20 @@ async def baselines(request: Request) -> dict[str, Any]:
     return baseline_catalog()
 
 
+@router.post("/health/models")
+async def run_model_probe(request: Request, force: bool = False) -> dict[str, Any]:
+    """Start a per-model probe run in the background. `force` ignores due dates."""
+    require_token(request)
+    prober = hub_of(request).model_prober
+    started = prober.start_run(force=force)
+    return {"started": started, **prober.status()}
+
+
+@router.get("/health/models")
+async def model_probe_status(request: Request) -> dict[str, Any]:
+    return hub_of(request).model_prober.status()
+
+
 @router.get("/health/status")
 async def health_sweep_status(request: Request) -> dict[str, Any]:
     hub = hub_of(request)

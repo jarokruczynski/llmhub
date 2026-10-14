@@ -404,6 +404,18 @@ class Settings:
     # would otherwise hold the request for the client's whole read timeout, which is ten minutes:
     # the quick-add dialog then looks broken while the backend is still politely waiting.
     probe_timeout_s: int = 60
+    # Per-model prober: hours an `ok` pair may go unproven before it is probed again, and 0 to
+    # turn the prober off. Real traffic counts as proof, so a model in use is never probed.
+    model_probe_every_h: int = 6
+    # accounts probed side by side, and the pause between two probes on one account
+    model_probe_parallel: int = 4
+    model_probe_gap_s: float = 1.0
+    # probes one run may spend, so a first run over hundreds of pairs spreads over several ticks
+    model_probe_max_per_run: int = 150
+    # a cli account counts whole requests against a daily plan, so it gets a hard daily ceiling
+    model_probe_cli_daily: int = 5
+    # how long an account stays parked once its key or wallet is refused on several models
+    model_probe_account_ttl_s: int = 6 * 3600
     # the scout talks to the hub through its own OpenAI wire, so it goes through the same
     # routing, quota accounting and free-only policy as any other client
     hub_base_url: str = "http://127.0.0.1:8800/v1"
@@ -446,6 +458,10 @@ class Settings:
             max_attempts=_positive_int(env, "LLMHUB_MAX_ATTEMPTS", 16),
             health_sweep_every_h=_non_negative_int(env, "LLMHUB_HEALTH_SWEEP_EVERY_H", 6),
             probe_timeout_s=_positive_int(env, "LLMHUB_PROBE_TIMEOUT_S", 60),
+            model_probe_every_h=_non_negative_int(env, "LLMHUB_MODEL_PROBE_EVERY_H", 6),
+            model_probe_parallel=_positive_int(env, "LLMHUB_MODEL_PROBE_PARALLEL", 4),
+            model_probe_max_per_run=_positive_int(env, "LLMHUB_MODEL_PROBE_MAX_PER_RUN", 150),
+            model_probe_cli_daily=_non_negative_int(env, "LLMHUB_MODEL_PROBE_CLI_DAILY", 5),
             hub_base_url=env.get("LLMHUB_BASE_URL", "http://127.0.0.1:8800/v1").rstrip("/"),
             scout_at=scout_at or None,
             scout_sources_path=Path(scout_sources) if scout_sources else None,

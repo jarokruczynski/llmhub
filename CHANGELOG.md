@@ -25,6 +25,12 @@ for the record but have no tags: those commits are not part of this repository.
   filter has an Unverified chip and the overview counts them; `LLMHUB_HEALTH_SWEEP_EVERY_H`
   is listed in the README.
 
+- Per-model prober: every free (account, model) pair is probed on a schedule, with a due date
+  per pair that follows its park or quota reset. An account whose key or wallet is refused on
+  three models in a row is parked whole, so the pool stops offering models that always fail.
+  `POST/GET api/health/models`, settings `LLMHUB_MODEL_PROBE_*`. The playground model picker
+  hides unavailable models (toggle to show them) and models whose output cap is below the
+  chosen max tokens.
 - Per-provider sync budget: `sync_budget_s` on a provider block or its catalog template
   replaces `LLMHUB_RUN_BUDGET_S` (90 s) while that provider serves a sync or stream call.
   The antigravity template sets 360 s, so a 60-140 s read is no longer cut at 105 s and agy's

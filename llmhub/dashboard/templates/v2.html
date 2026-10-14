@@ -131,6 +131,10 @@
             <select class="select" id="playground-model">
               <!-- Populated by v2.js -->
             </select>
+            <label class="form-help" style="display:flex; gap:0.4rem; align-items:center">
+              <input type="checkbox" id="playground-show-unavailable">
+              Show unavailable models <span id="playground-hidden-count" class="text-muted"></span>
+            </label>
             <div class="form-help" id="playground-model-help">
               A <b>profile</b> lets the hub pick a free model for you and fall back to the next one
               when a vendor says no. A <b>specific model</b> is tried alone, with no fallback.
@@ -375,7 +379,7 @@
           <div>
             <span style="font-weight:600; font-size:0.9rem">🛡️ Availability Health Verification:</span>
             <span class="text-muted" style="font-size:0.8rem; margin-left:0.5rem" id="sweep-summary-text">
-              Paced probe (1 request per active account, skips exhausted/parked).
+              Probes one model per account, then every free model; the hub repeats this on its own.
             </span>
           </div>
           <button type="button" class="btn btn-sm" id="btn-run-sweep-accounts" onclick="runAvailabilitySweep()">⚡ Run Availability Sweep</button>

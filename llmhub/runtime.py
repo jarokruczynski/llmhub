@@ -44,6 +44,7 @@ class Hub:
         self.jobs: Any = None
         self.scout: Any = None
         self.health: Any = None
+        self.model_prober: Any = None
         self.pool_probe: Any = None
         # off until someone arms it from the console; holds nothing until then
         self.recorder = Recorder()

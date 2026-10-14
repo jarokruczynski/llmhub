@@ -1353,6 +1353,28 @@ Routing: a model with `vision` in `caps` enters the `vision` alias pool and matc
 `prefer` list first, so the agy Gemini ids join `vision` (and `auto`, which has no
 `require`) behind the preferred ones. No alias order was changed.
 
+## Model prober - proof per (account, model), not per account
+The account sweep leaves most of the registry unproven: it asks one model per account, so a
+wallet that is empty or a plan that lacks a model shows up only when a caller picks that model
+and gets a 402 or 404. `llmhub/model_probe.py` walks every free pair with the same
+`probe_entry` call (`max_tokens: 1`) and keeps a due date per pair in `model_probes`.
+
+- Served call: proven for `model_probe_every_h` (env `LLMHUB_MODEL_PROBE_EVERY_H`, default 6,
+  `0` turns it off). Real traffic inside the window counts as the probe.
+- Refused route: due when the park expires. Quota spent: due when the window resets. Anything
+  else (timeout, transport): due again in 30 min.
+- Account-level refusal (401, 402, or a named empty wallet) is confirmed on three models of the
+  account in a row. Then the rest of that account is parked in one step for
+  `model_probe_account_ttl_s` (6 h) and carries one due date. A plain 403 "no permission" stays
+  per model: a plan may lack one model and serve seventy.
+- Cost: accounts run side by side (`LLMHUB_MODEL_PROBE_PARALLEL`, 4), one second apart per
+  account, at most `LLMHUB_MODEL_PROBE_MAX_PER_RUN` (150) probes per run, so a first pass over
+  hundreds of pairs spreads over several 5 min ticks. A cli account has a daily ceiling
+  (`LLMHUB_MODEL_PROBE_CLI_DAILY`, 5) because it counts whole requests.
+- `POST api/health/models` starts a run in the background (`?force=true` ignores due dates);
+  `GET api/health/models` reports progress and the last run. The Run Availability Sweep button
+  runs the account sweep and then a forced model run.
+
 ## Health sweep - periodic proof that an idle account still works
 Real traffic answers this for the accounts it touches: a served call writes a usage row and the
 accounts view reads the newest one per account. It cannot answer it for an account nothing has

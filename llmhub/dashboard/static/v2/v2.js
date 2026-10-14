@@ -1880,14 +1880,25 @@
       const seen = byKey.get(m.key);
       if (!seen || (seen.status !== 'ok' && m.status === 'ok')) byKey.set(m.key, m);
     }
-    const rank = (m) => (m.status === 'ok' ? 0 : m.status === 'unverified' ? 1 : 2);
-    const models = [...byKey.values()].sort((a, b) => rank(a) - rank(b) || a.key.localeCompare(b.key));
+    // a model that cannot answer is not offered: the picker used to list every pair and the
+    // call then failed with a 502. Unverified pairs stay (the router still tries them), after
+    // the ok ones. The toggle brings the unavailable ones back, labelled with the reason.
+    const showAll = document.getElementById('playground-show-unavailable')?.checked ?? false;
+    const wantOut = parseInt(document.getElementById('playground-max-tokens')?.value || '0', 10) || 0;
+    const capped = (m) => wantOut && m.observed_out_cap && m.observed_out_cap < wantOut;
+    const usable = (m) => (m.status === 'ok' || m.status === 'unverified') && !capped(m);
+    const rank = (m) => (!usable(m) ? 2 : m.status === 'ok' ? 0 : 1);
+    const all = [...byKey.values()].sort((a, b) => rank(a) - rank(b) || a.key.localeCompare(b.key));
+    const models = showAll ? all : all.filter(usable);
+    const hidden = all.length - models.length;
+    const hiddenNote = document.getElementById('playground-hidden-count');
+    if (hiddenNote) hiddenNote.textContent = hidden ? `${hidden} unavailable hidden` : '';
     const modelGroup = document.createElement('optgroup');
     modelGroup.label = 'One specific model - no fallback';
     models.forEach(m => {
       const opt = document.createElement('option');
       opt.value = m.key;
-      opt.textContent = m.status === 'ok' ? m.key : `${m.key}  (${m.status})`;
+      opt.textContent = capped(m) ? `${m.key}  (max ${m.observed_out_cap} out)` : (m.status === 'ok' ? m.key : `${m.key}  (${m.status})`);
       modelGroup.appendChild(opt);
     });
     select.appendChild(modelGroup);
@@ -2332,7 +2343,7 @@
     if (btn1) { btn1.disabled = true; btn1.textContent = '⏳ Checking...'; }
     if (btn2) { btn2.disabled = true; btn2.textContent = '⏳ Checking...'; }
 
-    notify('Starting paced availability sweep (1 probe/active account)...', 'info');
+    notify('Starting availability sweep: one probe per account, then every free model...', 'info');
 
     try {
       const res = await api('api/health/sweep', { method: 'POST' });
@@ -2351,6 +2362,7 @@
           summaryText.innerHTML = `Last sweep completed just now: <strong>${passed}/${probed} accounts verified</strong> (skipped ${skipped}).`;
         }
         await loadStatus();
+        await runModelProbe(summaryText);
       } else {
         notify('Health sweep failed: HTTP ' + res.status, 'error');
       }
@@ -2361,6 +2373,31 @@
       if (btn2) { btn2.disabled = false; btn2.textContent = '⚡ Run Availability Sweep'; }
     }
   };
+
+  // every free (account, model) pair, in the background on the hub; this only watches it
+  async function runModelProbe(summaryText) {
+    const start = await api('api/health/models?force=true', { method: 'POST' });
+    if (!start.ok) {
+      notify('Model probe failed to start: HTTP ' + start.status, 'error');
+      return;
+    }
+    for (let i = 0; i < 400; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      const res = await api('api/health/models');
+      if (!res.ok) break;
+      const st = await res.json();
+      const run = st.current || st.last;
+      if (run && summaryText) {
+        summaryText.innerHTML = `Model probe: <strong>${run.probed}</strong> of ${run.due} checked, ${run.ok} ok, ${run.failed} failed` +
+          (run.accounts_parked.length ? `, parked accounts: ${run.accounts_parked.join(', ')}` : '');
+      }
+      if (!st.running) {
+        await loadStatus();
+        notify(`Model probe done: ${run ? run.ok : 0} ok, ${run ? run.failed : 0} failed.`, 'success');
+        return;
+      }
+    }
+  }
 
   window.testAccount = async function (provider, account) {
     notify(`Testing connection to ${provider}/${account}...`, 'info');
@@ -3160,6 +3197,8 @@
     });
 
     document.getElementById('playground-model')?.addEventListener('change', describePlaygroundTarget);
+    document.getElementById('playground-show-unavailable')?.addEventListener('change', populatePlaygroundModels);
+    document.getElementById('playground-max-tokens')?.addEventListener('change', populatePlaygroundModels);
     document.getElementById('playground-temp')?.addEventListener('input', describePlaygroundSettings);
     document.getElementById('playground-max-tokens')?.addEventListener('input', describePlaygroundSettings);
     describePlaygroundSettings();

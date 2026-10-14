@@ -20,6 +20,19 @@ TERMINAL_JOB_STATES: tuple[str, ...] = ("done", "failed", "expired", "cancelled"
 DEFAULT_JOB_TTL_S = 6 * 3600
 
 TABLES = (
+    # one row per (account, model): the newest per-model probe and when the next one is due
+    """
+    CREATE TABLE IF NOT EXISTS model_probes (
+        account TEXT NOT NULL,
+        model TEXT NOT NULL,
+        ts TEXT NOT NULL,
+        ok INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        code TEXT,
+        next_due_ts TEXT NOT NULL,
+        PRIMARY KEY (account, model)
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS health_sweeps (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1362,6 +1375,41 @@ class Store:
             "INSERT INTO health_sweeps (ts, probed, skipped, results) VALUES (?, ?, ?, ?)",
             (ts, int(probed), int(skipped), json.dumps(results)),
         )
+
+    def record_model_probe(
+        self, account: str, model: str, *, ts: str, ok: bool, status: str, code: str | None, next_due: str
+    ) -> None:
+        self.execute(
+            """
+            INSERT INTO model_probes (account, model, ts, ok, status, code, next_due_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account, model) DO UPDATE SET ts = excluded.ts, ok = excluded.ok,
+                status = excluded.status, code = excluded.code, next_due_ts = excluded.next_due_ts
+            """,
+            (account, model, ts, int(ok), status, code, next_due),
+        )
+
+    def defer_model_probe(self, account: str, model: str, *, ts: str, status: str, next_due: str) -> None:
+        """Move the due date without claiming a probe happened (proven by traffic, or parked)."""
+        self.execute(
+            """
+            INSERT INTO model_probes (account, model, ts, ok, status, code, next_due_ts)
+            VALUES (?, ?, ?, 0, ?, NULL, ?)
+            ON CONFLICT(account, model) DO UPDATE SET next_due_ts = excluded.next_due_ts
+            """,
+            (account, model, ts, status, next_due),
+        )
+
+    def model_probes_all(self) -> dict[tuple[str, str], dict[str, Any]]:
+        rows = self.query("SELECT * FROM model_probes")
+        return {(row["account"], row["model"]): row for row in rows}
+
+    def model_probes_since(self, account: str, since: str) -> int:
+        row = self.query_one(
+            "SELECT COUNT(*) AS n FROM model_probes WHERE account = ? AND ts >= ? AND status != 'deferred'",
+            (account, since),
+        )
+        return int(row["n"]) if row else 0
 
     def last_health_sweep(self) -> dict[str, Any] | None:
         return self.query_one("SELECT * FROM health_sweeps ORDER BY id DESC LIMIT 1")
