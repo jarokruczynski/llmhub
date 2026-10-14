@@ -33,7 +33,9 @@ async def test_status_shape(client: httpx.AsyncClient, hub: Hub) -> None:
     assert row["provider"] == "alpha"
     assert row["account"] in ("alpha-1", "alpha-2")
     assert row["caps"] == ["text", "tools"]
-    assert row["status"] == "ok"
+    # a fresh hub has no answer from any pair on record: nothing blocks it, nothing proves it
+    assert row["status"] == "unverified"
+    assert row["reason"] == "never answered yet"
     assert set(row["windows"]) == {"hourly", "daily"}
     assert row["windows"]["hourly"]["limit"] == 1000
     assert row["windows"]["hourly"]["resets_at"]

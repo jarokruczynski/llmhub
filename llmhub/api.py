@@ -729,6 +729,11 @@ def registry_provider_row(hub: Hub, provider: str) -> dict[str, Any]:
 
 def reload_counts(hub: Hub) -> dict[str, Any]:
     hub.reload()
+    # a pair new to the registry is a guess until it answers once: the health service probes
+    # the unverified ones in the background rather than waiting for the next scheduled sweep
+    service = getattr(hub, "health", None)
+    if service is not None and hasattr(service, "request_verify"):
+        service.request_verify()
     entries = list(hub.registry.entries())
     return {
         "registry_path": str(hub.settings.registry_path),

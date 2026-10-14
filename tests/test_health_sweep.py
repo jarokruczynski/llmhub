@@ -6,29 +6,44 @@ from datetime import UTC, datetime, timedelta
 
 import httpx
 
-from llmhub.health import HealthSweepService, last_sweep, sweep_once
+from llmhub.health import HealthSweepService, last_sweep, sweep_once, verify_once
 from llmhub.runtime import Hub
 from llmhub.store import to_iso
 
 
+def served(hub: Hub, provider: str, account: str, model: str, when: datetime) -> None:
+    hub.store.start_usage(
+        app="test",
+        provider=provider,
+        account=account,
+        model=f"{provider}/{model}",
+        status="ok",
+        latency_ms=1,
+        attempt=1,
+        ts=to_iso(when),
+    )
+
+
 def mark_every_account_served(hub: Hub, when: datetime) -> int:
-    served = 0
+    """Every free pair answered at `when`: nothing left to verify, only liveness to ask."""
+    accounts = 0
     for provider_name, provider in hub.registry.providers.items():
         if not provider.models:
             continue
         for account in provider.accounts:
-            hub.store.start_usage(
-                app="test",
-                provider=provider_name,
-                account=account.id,
-                model=f"{provider_name}/{provider.models[0].id}",
-                status="ok",
-                latency_ms=1,
-                attempt=1,
-                ts=to_iso(when),
-            )
-            served += 1
-    return served
+            for model in provider.models:
+                if model.is_free:
+                    served(hub, provider_name, account.id, model.id, when)
+            accounts += 1
+    return accounts
+
+
+def fake_probe_into(probed: list[tuple[str, str]], ok: bool = True):
+    async def fake_probe(_hub: Hub, entry, prompt: str = "ping") -> dict[str, object]:
+        probed.append((entry.account_id, entry.key))
+        return {"ok": ok, "status": "ok" if ok else "not_found", "latency_ms": 1}
+
+    return fake_probe
 
 
 async def test_traffic_inside_the_window_stands_in_for_a_probe(hub: Hub) -> None:
@@ -102,14 +117,105 @@ async def test_health_status_reports_the_schedule(client: httpx.AsyncClient) -> 
     assert "last_sweep_at" in body
 
 
+async def test_an_idle_account_with_every_pair_verified_gets_one_liveness_probe(
+    hub: Hub, monkeypatch
+) -> None:
+    now = datetime.now(UTC)
+    accounts = mark_every_account_served(hub, now - timedelta(hours=30))
+    probed: list[tuple[str, str]] = []
+    monkeypatch.setattr("llmhub.api.probe_entry", fake_probe_into(probed))
+
+    result = await sweep_once(hub, now=now, stale_after_h=6)
+
+    assert result["probed_count"] == accounts
+    assert result["verified_count"] == 0
+    assert {row["purpose"] for row in result["results"]} == {"liveness"}
+    assert len({(row["provider"], row["account"]) for row in result["results"]}) == accounts
+
+
+async def test_an_unverified_pair_on_a_served_account_is_still_probed(hub: Hub, monkeypatch) -> None:
+    """Traffic on a sibling model proves the key, not the model: gamma-1 served `fixed` five
+    minutes ago and has never had an answer on `openended`."""
+    now = datetime.now(UTC)
+    mark_every_account_served(hub, now - timedelta(minutes=5))
+    hub.store.execute("DELETE FROM usage WHERE account = 'gamma-1' AND model = 'gamma/openended'")
+    probed: list[tuple[str, str]] = []
+    monkeypatch.setattr("llmhub.api.probe_entry", fake_probe_into(probed))
+
+    result = await sweep_once(hub, now=now, stale_after_h=6)
+
+    assert probed == [("gamma-1", "gamma/openended")]
+    assert result["verified_count"] == 1
+    assert result["results"][0]["purpose"] == "verify"
+    assert ("gamma-1", "gamma/fixed") not in probed
+    # the other accounts had nothing to verify and traffic inside the window
+    assert {row["reason"] for row in result["skipped"]} == {"recently_served"}
+
+
+async def test_a_verification_pass_probes_only_unanswered_pairs_and_records_no_sweep(
+    hub: Hub, monkeypatch
+) -> None:
+    now = datetime.now(UTC)
+    # alpha-1 answered once, long ago: verified and idle, which a verification pass leaves alone
+    served(hub, "alpha", "alpha-1", "m1", now - timedelta(days=10))
+    probed: list[tuple[str, str]] = []
+    monkeypatch.setattr("llmhub.api.probe_entry", fake_probe_into(probed))
+
+    result = await verify_once(hub, now=now)
+
+    assert ("alpha-1", "alpha/m1") not in probed
+    assert ("alpha-2", "alpha/m1") in probed
+    assert ("beta-1", "beta/m2") in probed
+    assert {row["purpose"] for row in result["results"]} == {"verify"}
+    alpha_1 = next(row for row in result["skipped"] if row["account"] == "alpha-1")
+    assert alpha_1["reason"] == "verified"
+    assert hub.store.last_health_sweep() is None
+    assert any("verification pass" in row["message"] for row in hub.store.events(limit=5))
+
+
+async def test_a_pass_with_nothing_to_verify_is_silent(hub: Hub, monkeypatch) -> None:
+    mark_every_account_served(hub, datetime.now(UTC) - timedelta(days=10))
+    probed: list[tuple[str, str]] = []
+    monkeypatch.setattr("llmhub.api.probe_entry", fake_probe_into(probed))
+
+    result = await verify_once(hub)
+
+    assert probed == []
+    assert result["probed_count"] == 0
+    assert not any(row["kind"] == "health_sweep" for row in hub.store.events(limit=5))
+
+
+async def test_a_registry_reload_asks_for_a_verification_pass(hub: Hub) -> None:
+    from llmhub.api import reload_counts
+
+    hub.health = HealthSweepService(hub)
+    reload_counts(hub)
+
+    assert hub.health._verify_wanted.is_set()
+
+
+async def test_the_service_verifies_unanswered_pairs_at_start(hub: Hub, monkeypatch) -> None:
+    hub.settings = replace(hub.settings, health_sweep_every_h=6)
+    probed: list[tuple[str, str]] = []
+    monkeypatch.setattr("llmhub.api.probe_entry", fake_probe_into(probed))
+    service = HealthSweepService(hub)
+
+    await service.start()
+    try:
+        for _ in range(100):
+            if ("beta-1", "beta/m2") in probed:
+                break
+            await asyncio.sleep(0.02)
+    finally:
+        await service.stop()
+
+    assert ("beta-1", "beta/m2") in probed
+    assert ("alpha-2", "alpha/m1") in probed
+
+
 async def test_a_pair_busy_with_real_traffic_is_not_probed(hub: Hub, monkeypatch) -> None:
     probed: list[tuple[str, str]] = []
-
-    async def fake_probe(_hub: Hub, entry, prompt: str = "ping") -> dict[str, object]:
-        probed.append((entry.account_id, entry.key))
-        return {"ok": True, "latency_ms": 1}
-
-    monkeypatch.setattr("llmhub.api.probe_entry", fake_probe)
+    monkeypatch.setattr("llmhub.api.probe_entry", fake_probe_into(probed))
 
     entry = hub.registry.entry("alpha/m1", "alpha-1")
     assert entry is not None

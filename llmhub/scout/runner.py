@@ -8,7 +8,7 @@ from typing import Any
 
 from ..providers_catalog import known_providers
 from ..runtime import Hub
-from ..status import entry_status
+from ..status import UNVERIFIED, entry_status
 from ..store import now_iso
 from .apply import apply_decisions, build_report, write_run
 from .collect import Page, collect
@@ -86,12 +86,19 @@ def curate_prefer(hub: Hub, now: datetime | None = None) -> str | None:
     disabled = hub.store.disabled_models()
     alias = hub.registry.aliases.get(STRONG_ALIAS)
     keys = tuple(alias.prefer) if alias is not None and alias.prefer else CURATE_PREFERENCE
-    for key in keys:
-        for entry in hub.registry.entries():
-            if entry.key != key:
-                continue
-            status, _ = entry_status(hub, entry, moment, disabled)
-            if status == "ok":
+    statuses = {
+        key: {
+            entry_status(hub, entry, moment, disabled)[0]
+            for entry in hub.registry.entries()
+            if entry.key == key
+        }
+        for key in keys
+    }
+    # a model that has answered before beats one nothing has tried yet, whatever the order;
+    # an unverified one still beats none, since the call itself is what verifies it
+    for wanted in ("ok", UNVERIFIED):
+        for key in keys:
+            if wanted in statuses[key]:
                 return key
     return None
 

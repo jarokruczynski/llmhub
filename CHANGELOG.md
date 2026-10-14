@@ -12,6 +12,19 @@ for the record but have no tags: those commits are not part of this repository.
 
 ### Added
 
+- Model status `unverified`: a pair nothing blocks but nothing has ever answered on (no `ok`
+  usage row, ever) is no longer reported as `ok`. `ok` now means the vendor has served the
+  pair at least once and nothing since says otherwise, so the dashboard's ready count and the
+  playground's model list count models that actually work. The router still tries an
+  unverified pair; the scout's `curate_prefer` takes one only when no `ok` pair is listed.
+- The health sweep verifies models, not only accounts: every eligible free pair with no answer
+  on record is probed whatever its account's traffic (`purpose: verify` in the results), once,
+  since an answer verifies the pair for good. A verification pass also runs on its own at
+  service start and after every registry reload, without touching the sweep schedule, so a
+  model added to the yaml or the dashboard is probed within seconds. The dashboard's Models
+  filter has an Unverified chip and the overview counts them; `LLMHUB_HEALTH_SWEEP_EVERY_H`
+  is listed in the README.
+
 - Per-provider sync budget: `sync_budget_s` on a provider block or its catalog template
   replaces `LLMHUB_RUN_BUDGET_S` (90 s) while that provider serves a sync or stream call.
   The antigravity template sets 360 s, so a 60-140 s read is no longer cut at 105 s and agy's
@@ -19,6 +32,13 @@ for the record but have no tags: those commits are not part of this repository.
 
 ### Fixed
 
+- The playground's error bubble names the cause instead of "all candidates failed" alone:
+  the attempt list (model, account, the hub's classification and the vendor's error code),
+  the rows rejected before any call, the last vendor body's own words, and the next window
+  when there is one. The per-model and per-account "Test" buttons now read the probe's `ok`
+  verdict: a probe the vendor refused reported "Test successful" because the endpoint
+  answers 200 either way. The playground's model help also says when the pair last answered
+  or last failed, and that an "ok" never called is the hub's books, not a probe.
 - A transient failure no longer parks a model until the next top of the hour. A timeout, a
   5xx after the retry, a CLI crash or unparseable output, an overloaded upstream, and an agy
   quota refusal that names no reset now cool the pair down on a backoff ladder (30 s, 60 s,

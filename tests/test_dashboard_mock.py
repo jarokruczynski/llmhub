@@ -10,6 +10,13 @@ def test_dev_mock_ships_a_request_metered_window() -> None:
     assert (metered[0]["used"], metered[0]["limit"]) == (12, 20)
 
 
+def test_dev_mock_ships_an_unverified_pair() -> None:
+    rows = [row for row in dev_mock._models() if row["status"] == "unverified"]
+    assert len(rows) == 1
+    assert rows[0]["last_ok_at"] is None
+    assert rows[0]["reason"] == "never answered yet"
+
+
 def test_the_mock_serves_a_waiting_call_for_the_kill_switch() -> None:
     states = {call["state"] for call in dev_mock.LIVE_CALLS}
     assert states == {"running", "waiting"}
