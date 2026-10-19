@@ -625,8 +625,14 @@ def shell_word(value: str) -> str:
 # refused ("only text"). Its view_file tool does hand an image to the model, but only for a
 # path it may read: --add-dir makes the workdir part of the workspace, where reads are granted
 # without a prompt, and the prompt names the absolute path so the agent does not go looking.
+# The flash models reach for a shell command to open the file, and headless mode denies
+# the "command" permission, so the turn ends with an empty response (measured 2026-10-19 on
+# gemini-3.8-flash-high: status SUCCESS, denied_actions RunCommand, response ""). Saying
+# there is no shell and naming the one tool that works made the same model answer.
 AGY_IMAGE_REFERENCE = (
-    "[Image {number} is the file {path} - open it with the view_file tool and look at it before answering.]"
+    "[Image {number} is the file {path}. You have no shell and no command tool here: do not "
+    "run any command. Open the file with the view_file tool, look at it, then answer in "
+    "plain text.]"
 )
 # agy keeps its login in the OS keychain as well as in a file. Under a HOME of its own there
 # is no login keychain, and macOS answers the write with a modal "Keychain Not Found" dialog

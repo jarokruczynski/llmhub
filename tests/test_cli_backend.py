@@ -199,7 +199,8 @@ def test_image_files_land_in_the_workdir_and_the_prompt_points_at_them(tmp_path:
         assert path.parent == tmp_path.resolve()
         assert path.name.startswith("img-") and path.suffix == ".png"
         assert path.read_bytes() == PNG_BYTES
-        assert f"Image {number} is the file {path} - open it with the view_file tool" in prompt
+        assert f"Image {number} is the file {path}." in prompt
+        assert "view_file tool" in prompt
     assert prompt.startswith("User: what colour is this\n[Image 1")
     agy.cleanup()
     assert list(tmp_path.iterdir()) == []
