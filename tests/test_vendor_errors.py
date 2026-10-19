@@ -745,3 +745,13 @@ def test_a_generic_token_limit_is_read_as_a_total() -> None:
         "limit": 500000,
         "used": None,
     }
+
+
+def test_agy_withdrawn_model_is_not_found() -> None:
+    body = {
+        "error": 'invalid model selection (--model "gemini-3.1-pro-high" --effort ""): model '
+        "gemini-3.1-pro-high is not recognized as a known model or custom model in settings"
+        "\nAvailable models:\n  Gemini 3.8 Flash (High)"
+    }
+    result = classify(None, body, "antigravity")
+    assert result.kind == "not_found"

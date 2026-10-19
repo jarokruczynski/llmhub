@@ -219,6 +219,9 @@ NOT_FOUND_TEXTS = (
     "model not found",
     "no such model",
     "unknown model",
+    # agy, when the catalog still lists a model Antigravity has withdrawn (gemini-3.1-pro
+    # went 2026-10): "model X is not recognized as a known model or custom model in settings"
+    "not recognized as a known model",
 )
 
 # The provider's own upstream is down but it answers 4xx while saying so, which would
