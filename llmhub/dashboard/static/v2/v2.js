@@ -122,6 +122,14 @@
       .replace(/'/g, '&#039;');
   }
 
+  function discoveryTitle(discovery) {
+    if (!discovery) return '';
+    const lines = [];
+    for (const m of discovery.new_models || []) lines.push(`new: ${m.key}${m.enabled ? '' : ' (disabled)'}`);
+    for (const m of discovery.vanished || []) lines.push(`gone: ${m.key}`);
+    return lines.length ? lines.join('\n') : 'model listings match the registry';
+  }
+
   function formatNumber(num) {
     if (num === null || num === undefined) return '-';
     return Number(num).toLocaleString();
@@ -1191,6 +1199,16 @@
           </div>
           <div class="kpi-sub">
             <span>Fair-share workers: 6 slots</span>
+          </div>
+        </div>
+
+        <div class="kpi-card" title="${escapeHtml(discoveryTitle(state.status.discovery))}">
+          <div class="kpi-title">New Models <span>🆕</span></div>
+          <div class="kpi-value">${(state.status.discovery?.new_models || []).filter(m => m.enabled).length} <span style="font-size:0.9rem; color:var(--text-muted)">ready</span></div>
+          <div class="kpi-sub">
+            <span title="listed by a vendor with no proven free tier, not registered">${state.status.discovery?.offered_count || 0} offered</span> •
+            <span style="color:var(--status-depleted)">${(state.status.discovery?.vanished || []).length} gone</span> •
+            <span>Next: ${state.status.discovery?.next_run_at ? formatCountdown(state.status.discovery.next_run_at) : 'off'}</span>
           </div>
         </div>
 

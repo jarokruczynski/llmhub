@@ -1034,6 +1034,38 @@ providers do not hide the ones that worked. `--dry-run` only prints the table. A
 uses), writes only the fields that were actually missing, and prints the reload endpoint
 (`POST api/registry/reload`) as the last line.
 
+## Scheduled model discovery
+
+`model_discovery.DiscoveryService` runs a pass `START_DELAY_S` after start and then every
+`discovery_every_h` hours (env `LLMHUB_DISCOVERY_EVERY_H`, default 6, `0` = off), clocked from
+the last row in `discovery_runs`. A pass asks every provider with an account what it serves -
+HTTP kinds through the same `_fetch_listing` as refresh-context, once per account with its key
+present, ids unioned; a CLI through `discover_cli_models`, which runs under the block's own env,
+so a second login with its own HOME lists its own plan - and diffs it against the block's
+registered ids (`diff_listing`, pure):
+
+- **new**: offered (chat filter passed) and not registered. Registered through
+  `RegistryWriter.add_models`, after a backup to `~/.llmhub/backups/`, only when the listing proves
+  it free: a CLI listed it, its id ends in `:free`/`-free`,
+  or the catalog template has it with a non-null `free` (that row's caps and windows win).
+  Otherwise `free: {}`, caps `[text]` for a CLI and `caps_for_model_id` for HTTP.
+- **offered**: new but unproven. Not written to the yaml - an aggregator lists hundreds of paid
+  models - only a `model_listing` row with `offered = 1`, one event when first seen, and a count
+  on the dashboard. The row goes when the vendor stops listing it.
+- **vanished**: registered and not listed at all (raw or normalized, chat filter ignored). Gets a
+  disabled override unless one is already there; nothing is deleted. A listing that drops more
+  than `SUSPECT_SHARE` of the registry (and at least `SUSPECT_MIN` models) is reported and not
+  acted on, and a failed or empty listing says nothing vanished.
+- **returned**: listed again after vanishing. Discovery lifts the override only when
+  `model_listing.disabled_reason` says discovery wrote it.
+
+`model_listing` keeps first/last seen, `added_at`, `vanished_at`, `disabled_reason` and `offered` per key.
+Events are `kind: discovery`. `GET api/status` carries `discovery` (models added and offered in
+the last `NEW_MODEL_DAYS`, models gone, next run); `GET api/discovery` adds the last report and
+`POST api/discovery/run?dry_run=&provider=` runs a pass now. `python -m llmhub discover-models
+[--dry-run] [--provider NAME]` is the same pass from a shell; it writes the yaml and the store,
+and the running hub needs a reload to route the new models.
+
 ## v0.18 quota learning - metric- and window-aware observed caps
 
 `record_observed` knew one metric (`out_tokens`) and one source (what this account spent

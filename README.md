@@ -244,6 +244,19 @@ A model registered without a `context` routes fine but cannot be sized against
 [--provider NAME]` re-fetches each provider's own listing and fills it in wherever the
 vendor named one and the model had none, without touching a context the owner already set.
 
+Vendors add and withdraw models without notice, so the hub diffs every provider's own listing
+against the registry every `LLMHUB_DISCOVERY_EVERY_H` hours and once shortly after start
+(`GET /models` or the template's endpoint for HTTP kinds, `<command> models` for a CLI that has
+it, each login under its own HOME). A new model is registered with `free: {}` only where the
+listing proves it free: a CLI login, an id ending in `:free`/`-free`, or a model
+the catalog template lists as free. The rest of a vendor's catalogue is recorded as offered and
+reported, never written to the yaml. A model the vendor stopped listing is
+disabled, not deleted, and enabled again if it comes back. Neither touches the `free` windows of
+a registered model or lifts an override the owner set. The overview's New Models card and the
+`discovery` event kind report both; `python -m llmhub discover-models [--dry-run] [--provider
+NAME]` runs one pass by hand, and `POST api/discovery/run?dry_run=true` does the same on the
+running hub.
+
 ## CLI providers
 
 Some free paths are not an HTTP API but an agent CLI with a headless print mode. A
@@ -519,6 +532,7 @@ Environment variables:
 | `LLMHUB_JOB_RETENTION_DAYS` | how long finished job rows are kept | `7` |
 | `LLMHUB_PROBE_TIMEOUT_S` | per-probe deadline when a model is being tried | `60` |
 | `LLMHUB_HEALTH_SWEEP_EVERY_H` | hours between health sweeps (idle accounts, unverified models), `0` = off | `6` |
+| `LLMHUB_DISCOVERY_EVERY_H` | hours between model discovery passes (vendor listings vs registry), `0` = off | `6` |
 | `LLMHUB_SCOUT_AT` | daily scout run, local `HH:MM`, empty = off | `08:00` |
 | `LLMHUB_SCOUT_SOURCES` | path to `scout_sources.yaml` | `$LLMHUB_HOME/scout_sources.yaml` |
 | `LLMHUB_BASE_URL` | hub endpoint the scout calls for its own LLM work | `http://127.0.0.1:8800/v1` |

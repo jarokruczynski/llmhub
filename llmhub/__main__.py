@@ -29,6 +29,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     refresh_context.add_argument("--dry-run", action="store_true", help="print the table, write nothing")
     refresh_context.add_argument("--provider", default=None, help="limit the pass to one provider")
+    discover = sub.add_parser(
+        "discover-models", help="diff every provider's own model listing against the registry"
+    )
+    discover.add_argument("--dry-run", action="store_true", help="print the diff, write nothing")
+    discover.add_argument("--provider", default=None, help="limit the pass to one provider")
     return parser.parse_args(argv)
 
 
@@ -129,6 +134,60 @@ def run_refresh_context(dry_run: bool = False, provider: str | None = None) -> s
     return "\n".join(lines)
 
 
+def discovery_table(reports: list[dict[str, Any]]) -> str:
+    header = (
+        f"{'PROVIDER':<36} {'LISTED':>6} {'REG':>5} {'NEW':>4} {'OFFER':>5} {'GONE':>4} {'BACK':>4}  STATUS"
+    )
+    lines = [header, "-" * len(header)]
+    details: list[str] = []
+    for report in reports:
+        status = report["status"] + (" (suspect, gone left alone)" if report["suspect"] else "")
+        if report.get("error"):
+            status += f": {str(report['error'])[:80]}"
+        lines.append(
+            f"{report['provider']:<36} {report['listed']:>6} {report['registered']:>5} "
+            f"{len(report['new']):>4} {len(report['offered']):>5} {len(report['vanished']):>4} "
+            f"{len(report['returned']):>4}  {status}"
+        )
+        if report["new"]:
+            details.append(f"{report['provider']} new, registered: {', '.join(report['new'])}")
+        if report["vanished"]:
+            details.append(f"{report['provider']} gone: {', '.join(report['vanished'])}")
+        if report["returned"]:
+            details.append(f"{report['provider']} back: {', '.join(report['returned'])}")
+    return "\n".join(lines + ([""] + details if details else []))
+
+
+def run_discover_models(dry_run: bool = False, provider: str | None = None) -> str:
+    """One discovery pass from the command line. A real run writes providers.yaml (after a
+    backup) and the store; the running hub picks the yaml up on its next reload."""
+    from .model_discovery import run_pass
+
+    async def once(hub: Hub) -> dict[str, Any]:
+        try:
+            return await run_pass(hub, dry_run=dry_run, provider_filter=provider)
+        finally:
+            await hub.client.aclose()
+
+    hub = Hub.create(bootstrap_settings())
+    try:
+        result = asyncio.run(once(hub))
+    finally:
+        hub.store.close()
+    lines = [discovery_table(result["reports"])]
+    if dry_run:
+        lines.append("\ndry run: nothing written")
+    else:
+        if result.get("backup"):
+            lines.append(f"\nbackup {result['backup']}")
+        lines.append(f"registered {result['added']} new model(s)")
+        if result["added"]:
+            lines.append(
+                "reload the running hub with: curl -X POST http://127.0.0.1:8800/api/registry/reload"
+            )
+    return "\n".join(lines)
+
+
 def main(argv: list[str] | None = None) -> None:
     args = parse_args(argv)
     if args.command == "promos-dedupe":
@@ -138,6 +197,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "refresh-context":
         logging.basicConfig(level="WARNING", format="%(levelname)s %(name)s %(message)s")
         print(run_refresh_context(dry_run=args.dry_run, provider=args.provider))
+        return
+    if args.command == "discover-models":
+        logging.basicConfig(level="WARNING", format="%(levelname)s %(name)s %(message)s")
+        print(run_discover_models(dry_run=args.dry_run, provider=args.provider))
         return
     if args.command == "check":
         logging.basicConfig(level="WARNING", format="%(levelname)s %(name)s %(message)s")

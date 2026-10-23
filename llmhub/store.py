@@ -34,6 +34,27 @@ TABLES = (
     )
     """,
     """
+    CREATE TABLE IF NOT EXISTS discovery_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ts TEXT NOT NULL,
+        report TEXT NOT NULL DEFAULT '[]'
+    )
+    """,
+    # What model discovery last saw per registered model. `disabled_reason` is set only when
+    # discovery itself wrote the disabled override, so it never lifts one the owner set.
+    """
+    CREATE TABLE IF NOT EXISTS model_listing (
+        key TEXT PRIMARY KEY,
+        provider TEXT NOT NULL,
+        first_seen TEXT,
+        last_seen TEXT,
+        added_at TEXT,
+        vanished_at TEXT,
+        disabled_reason TEXT,
+        offered INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS health_sweeps (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ts TEXT NOT NULL,
@@ -1410,6 +1431,48 @@ class Store:
             (account, since),
         )
         return int(row["n"]) if row else 0
+
+    def record_discovery_run(self, *, ts: str, report: list[dict[str, Any]]) -> None:
+        self.execute("INSERT INTO discovery_runs (ts, report) VALUES (?, ?)", (ts, json.dumps(report)))
+
+    def last_discovery_run(self) -> dict[str, Any] | None:
+        row = self.query_one("SELECT * FROM discovery_runs ORDER BY id DESC LIMIT 1")
+        if row is None:
+            return None
+        return {"ts": row["ts"], "report": json.loads(row["report"] or "[]")}
+
+    def model_listing_all(self) -> dict[str, dict[str, Any]]:
+        return {row["key"]: row for row in self.query("SELECT * FROM model_listing")}
+
+    def upsert_model_listing(self, key: str, provider: str, **fields: Any) -> None:
+        current = self.query_one("SELECT * FROM model_listing WHERE key = ?", (key,)) or {}
+        row = {
+            name: fields[name] if name in fields else current.get(name)
+            for name in ("first_seen", "last_seen", "added_at", "vanished_at", "disabled_reason", "offered")
+        }
+        self.execute(
+            """
+            INSERT INTO model_listing (key, provider, first_seen, last_seen, added_at, vanished_at,
+                disabled_reason, offered) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET provider = excluded.provider,
+                first_seen = excluded.first_seen, last_seen = excluded.last_seen,
+                added_at = excluded.added_at, vanished_at = excluded.vanished_at,
+                disabled_reason = excluded.disabled_reason, offered = excluded.offered
+            """,
+            (
+                key,
+                provider,
+                row["first_seen"],
+                row["last_seen"],
+                row["added_at"],
+                row["vanished_at"],
+                row["disabled_reason"],
+                int(row["offered"] or 0),
+            ),
+        )
+
+    def delete_model_listing(self, key: str) -> None:
+        self.execute("DELETE FROM model_listing WHERE key = ?", (key,))
 
     def last_health_sweep(self) -> dict[str, Any] | None:
         return self.query_one("SELECT * FROM health_sweeps ORDER BY id DESC LIMIT 1")

@@ -32,6 +32,7 @@ from .baselines import catalog as baseline_catalog
 from .cli_backend import PROBE_PROMPT, CliRequestError, discover_cli_models
 from .config import CLI_KIND
 from .health import last_sweep, sweep_once
+from .model_discovery import discovery_summary, run_pass
 from .promo_identity import (
     duplicate_groups,
     hosts_of,
@@ -194,6 +195,7 @@ async def status(request: Request) -> dict[str, Any]:
         "queue": queue_summary(hub),
         "aliases": alias_rows(hub),
         "accounts": account_rows(hub),
+        "discovery": discovery_summary(hub, now),
     }
 
 
@@ -1504,6 +1506,29 @@ async def discover_provider_models(
         "registered": sorted(registered),
         "note": "limits unknown",
     }
+
+
+@router.get("/discovery")
+async def discovery_status(request: Request) -> dict[str, Any]:
+    hub = hub_of(request)
+    last = hub.store.last_discovery_run()
+    return {**discovery_summary(hub), "last_report": last["report"] if last else []}
+
+
+@router.post("/discovery/run")
+async def discovery_run(
+    request: Request, dry_run: bool = False, provider: str | None = None
+) -> dict[str, Any]:
+    require_token(request)
+    hub = hub_of(request)
+    if provider is not None and provider not in hub.registry.providers:
+        raise HTTPException(status_code=404, detail=f"unknown provider {provider}")
+    service = getattr(hub, "discovery", None)
+    if service is not None:
+        result = await service.run(dry_run=dry_run, provider_filter=provider)
+    else:
+        result = await run_pass(hub, dry_run=dry_run, provider_filter=provider)
+    return {**result, **lan_warning(request)}
 
 
 @router.post("/scout/run", status_code=202)

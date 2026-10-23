@@ -12,6 +12,13 @@ for the record but have no tags: those commits are not part of this repository.
 
 ### Added
 
+- Scheduled model discovery: every provider's own listing (`GET /models`, the template's
+  endpoint, or `<command> models` per CLI login) is diffed against the registry at start and
+  every `LLMHUB_DISCOVERY_EVERY_H` hours. New models are registered when the listing proves them
+  free (CLI login, `:free` id, catalog-vetted), reported as offered otherwise; models the vendor
+  stopped listing are disabled, not deleted, and come back on their own if listed again.
+  `discovery` events, a New Models card on the overview, `GET api/discovery`,
+  `POST api/discovery/run`, and `python -m llmhub discover-models [--dry-run]`.
 - Model status `unverified`: a pair nothing blocks but nothing has ever answered on (no `ok`
   usage row, ever) is no longer reported as `ok`. `ok` now means the vendor has served the
   pair at least once and nothing since says otherwise, so the dashboard's ready count and the

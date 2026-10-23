@@ -416,6 +416,9 @@ class Settings:
     model_probe_cli_daily: int = 5
     # how long an account stays parked once its key or wallet is refused on several models
     model_probe_account_ttl_s: int = 6 * 3600
+    # hours between two model discovery passes (each provider's own listing diffed against the
+    # registry); one also runs at start. 0 turns the schedule off.
+    discovery_every_h: int = 6
     # the scout talks to the hub through its own OpenAI wire, so it goes through the same
     # routing, quota accounting and free-only policy as any other client
     hub_base_url: str = "http://127.0.0.1:8800/v1"
@@ -462,6 +465,7 @@ class Settings:
             model_probe_parallel=_positive_int(env, "LLMHUB_MODEL_PROBE_PARALLEL", 4),
             model_probe_max_per_run=_positive_int(env, "LLMHUB_MODEL_PROBE_MAX_PER_RUN", 150),
             model_probe_cli_daily=_non_negative_int(env, "LLMHUB_MODEL_PROBE_CLI_DAILY", 5),
+            discovery_every_h=_non_negative_int(env, "LLMHUB_DISCOVERY_EVERY_H", 6),
             hub_base_url=env.get("LLMHUB_BASE_URL", "http://127.0.0.1:8800/v1").rstrip("/"),
             scout_at=scout_at or None,
             scout_sources_path=Path(scout_sources) if scout_sources else None,
