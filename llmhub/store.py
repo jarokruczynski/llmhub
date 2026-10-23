@@ -296,6 +296,7 @@ COLUMN_MIGRATIONS: tuple[tuple[str, str, str], ...] = (
     # the other axis of "request too large": a per-request ceiling on output tokens, which the
     # caller controls with max_tokens rather than with the size of the prompt
     ("observed_request_caps", "max_out_tokens", "INTEGER"),
+    ("model_listing", "offered", "INTEGER NOT NULL DEFAULT 0"),
 )
 
 INDEXES = (
