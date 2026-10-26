@@ -128,3 +128,24 @@ async def test_the_dashboard_carries_no_prices_of_its_own(client: httpx.AsyncCli
 
     assert "BASELINES" not in script.text
     assert "GPT-4o" not in page.text
+
+
+async def test_console_layout_has_grouped_sidebar_page_headers_and_no_emoji(
+    client: httpx.AsyncClient,
+) -> None:
+    import re
+
+    page = (await client.get("/")).text
+    for group in ("Gateway", "Sources", "Observability"):
+        assert f'<div class="nav-group-label">{group}</div>' in page
+    tabs = re.findall(r'class="nav-item[^"]*" data-tab="([a-z]+)"', page)
+    panels = re.findall(r'class="panel[^"]*" data-panel="([a-z]+)"', page)
+    assert tabs == panels
+    assert len(tabs) == 10
+    assert page.count('<header class="page-header">') == len(panels)
+    assert "quick-actions-bar" not in page
+
+    emoji = re.compile("[\U0001f300-\U0001faff☀-➿️]")
+    for path in ("/", "/static/v2/v2.js", "/static/v2/events.js"):
+        body = (await client.get(path)).text
+        assert not emoji.findall(body), path

@@ -18,109 +18,111 @@
 </head>
 <body>
 
-  <!-- Topbar Header -->
-  <header class="studio-header">
-    <div class="brand-group">
-      <a href="./" class="logo-link">
-        <div class="logo-icon">H</div>
-        <span class="brand-text">LLMHub</span>
-      </a>
-      <span class="version-badge">Studio v2</span>
+  <div class="app-shell">
+
+  <aside class="sidebar" id="sidebar" aria-label="Sections">
+    <a href="./" class="sidebar-brand">
+      <span class="logo-mark" aria-hidden="true">H</span>
+      <span class="brand-text">LLMHub</span>
+      <span class="version-badge">Studio</span>
+    </a>
+
+    <nav class="studio-nav">
+      <div class="nav-group">
+        <button type="button" class="nav-item active" data-tab="overview"><i class="icon" data-icon="overview"></i><span>Overview</span></button>
+        <button type="button" class="nav-item" data-tab="playground"><i class="icon" data-icon="playground"></i><span>Playground</span></button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-label">Gateway</div>
+        <button type="button" class="nav-item" data-tab="models"><i class="icon" data-icon="models"></i><span>Models</span><span class="nav-count" id="nav-count-models"></span></button>
+        <button type="button" class="nav-item" data-tab="routing"><i class="icon" data-icon="routing"></i><span>Routing</span></button>
+        <button type="button" class="nav-item" data-tab="queue"><i class="icon" data-icon="queue"></i><span>Queue</span><span class="nav-count" id="nav-count-queue"></span></button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-label">Sources</div>
+        <button type="button" class="nav-item" data-tab="accounts"><i class="icon" data-icon="accounts"></i><span>Accounts</span></button>
+        <button type="button" class="nav-item" data-tab="promos"><i class="icon" data-icon="promos"></i><span>Promos</span><span class="nav-count" id="nav-count-promos"></span></button>
+      </div>
+      <div class="nav-group">
+        <div class="nav-group-label">Observability</div>
+        <button type="button" class="nav-item" data-tab="usage"><i class="icon" data-icon="usage"></i><span>Usage</span></button>
+        <button type="button" class="nav-item" data-tab="events"><i class="icon" data-icon="events"></i><span>Events</span></button>
+        <button type="button" class="nav-item" data-tab="recorder"><i class="icon" data-icon="recorder"></i><span>Recorder</span></button>
+      </div>
+    </nav>
+
+    <div class="sidebar-foot">Free-only LLM gateway</div>
+  </aside>
+  <div class="sidebar-scrim" id="sidebar-scrim" hidden></div>
+
+  <div class="main-col">
+  <header class="topbar">
+    <button type="button" class="icon-btn topbar-menu" id="sidebar-toggle" aria-label="Open navigation" aria-controls="sidebar" aria-expanded="false"><i class="icon" data-icon="menu"></i></button>
+
+    <div class="topbar-search" role="search">
+      <i class="icon" data-icon="search"></i>
+      <input type="search" id="global-search" placeholder="Search pages and models" autocomplete="off" aria-label="Search pages and models" aria-controls="global-search-results" aria-expanded="false">
+      <kbd class="kbd" aria-hidden="true">Ctrl K</kbd>
+      <div class="search-results" id="global-search-results" role="listbox" hidden></div>
     </div>
 
-    <div class="header-status-group">
-      <div class="live-pill" id="live-indicator-pill" title="Click to view Live in-flight activity">
+    <div class="topbar-right">
+      <button type="button" class="live-pill" id="live-indicator-pill" title="Calls in flight right now">
         <span class="pulse-dot" id="live-pulse-dot"></span>
         <span id="live-text">Gateway Idle</span>
-      </div>
-      <span class="nav-badge" id="top-models-summary">Models -</span>
-    </div>
-
-    <div class="header-controls">
-      <button type="button" class="btn" id="theme-toggle" title="Toggle Light / Dark mode">☀️ Light</button>
-      <button type="button" class="btn" id="token-btn" title="Set Bearer Auth Token">Token</button>
-      <button type="button" class="btn" id="refresh-btn" title="Reload all data">↻ Refresh</button>
+      </button>
+      <span class="nav-badge topbar-models" id="top-models-summary" title="Models ready to serve">Models -</span>
+      <button type="button" class="icon-btn" id="refresh-btn" title="Reload all data" aria-label="Reload all data"><i class="icon" data-icon="refresh"></i></button>
+      <button type="button" class="icon-btn" id="theme-toggle" title="Switch theme" aria-label="Switch theme"><i class="icon" data-icon="sun"></i></button>
+      <button type="button" class="btn btn-sm" id="token-btn" title="Bearer token for changes from another device"><i class="icon" data-icon="key"></i><span class="hide-sm">Token</span></button>
     </div>
   </header>
-
-  <!-- Navigation Tabs -->
-  <nav class="studio-nav">
-    <button type="button" class="nav-item active" data-tab="overview">
-      <span>Dashboard</span>
-    </button>
-    <button type="button" class="nav-item" data-tab="playground">
-      <span>Playground</span>
-      <span class="nav-badge" style="background:var(--accent-glow); color:var(--accent-primary)">LIVE</span>
-    </button>
-    <button type="button" class="nav-item" data-tab="models">
-      <span>Models Fleet</span>
-    </button>
-    <button type="button" class="nav-item" data-tab="routing">
-      <span>Routing & Matrix</span>
-    </button>
-    <button type="button" class="nav-item" data-tab="queue">
-      <span>Queue & Jobs</span>
-    </button>
-    <button type="button" class="nav-item" data-tab="accounts">
-      <span>Accounts</span>
-    </button>
-    <button type="button" class="nav-item" data-tab="promos">
-      <span>Promos & Scout</span>
-    </button>
-    <button type="button" class="nav-item" data-tab="usage">
-      <span>Usage & Savings</span>
-    </button>
-    <button type="button" class="nav-item" data-tab="events">
-      <span>Events Log</span>
-    </button>
-    <button type="button" class="nav-item" data-tab="recorder">
-      <span>Recorder</span>
-    </button>
-  </nav>
 
   <!-- Main Content -->
   <main class="studio-main">
 
     <!-- TAB 1: OVERVIEW -->
     <section class="panel active" data-panel="overview">
-      <div class="kpi-grid" id="overview-kpis">
-        <!-- Injected by v2.js -->
-      </div>
-
-      <div class="quick-actions-bar">
-        <span class="quick-actions-title">⚡ Quick Actions:</span>
-        <button type="button" class="btn btn-primary" id="btn-quick-add">+ Quick Add Key</button>
-        <button type="button" class="btn" id="btn-health-sweep" onclick="runAvailabilitySweep()">⚡ Check Availability</button>
-        <button type="button" class="btn" id="btn-reload-registry">🔄 Reload Registry</button>
-        <button type="button" class="btn" onclick="triggerScoutRun()">🎯 Trigger Scout</button>
-        <button type="button" class="btn" onclick="switchTab('playground')">▶ Open Playground</button>
-      </div>
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">Overview</h1>
+          <p class="page-desc">Which models are ready, what went through the hub today, and what is running right now.</p>
+        </div>
+        <div class="page-actions">
+          <button type="button" class="btn" id="btn-health-sweep" onclick="runAvailabilitySweep()"><i class="icon" data-icon="check"></i><span>Check availability</span></button>
+          <button type="button" class="btn btn-primary" id="btn-quick-add"><i class="icon" data-icon="plus"></i><span>Add key</span></button>
+        </div>
+      </header>
+      <div class="kpi-grid" id="overview-kpis"></div>
 
       <div class="overview-columns">
         <div class="section-card">
           <div class="section-header">
-            <span class="section-title">🔥 Most Active Models Today</span>
-            <button type="button" class="btn btn-sm" onclick="switchTab('models')">View All</button>
+            <span class="section-title">Most active models today</span>
+            <button type="button" class="btn btn-sm btn-ghost" onclick="switchTab('models')">View all</button>
           </div>
-          <div id="overview-top-models">
-            <!-- Injected by v2.js -->
-          </div>
+          <div id="overview-top-models"></div>
         </div>
 
         <div class="section-card">
           <div class="section-header">
-            <span class="section-title">📡 Live Gateway In-Flight Streams</span>
-            <span class="text-muted" style="font-size:0.8rem">Auto-refresh (2s)</span>
+            <span class="section-title">In flight</span>
+            <span class="text-muted section-meta">refreshes every 2 s</span>
           </div>
-          <div id="overview-live-container">
-            <!-- Injected by v2.js -->
-          </div>
+          <div id="overview-live-container"></div>
         </div>
       </div>
     </section>
 
     <!-- TAB 2: PLAYGROUND -->
     <section class="panel" data-panel="playground">
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">Playground</h1>
+          <p class="page-desc">Send a prompt through the hub and see which model answered, how fast, and for how many tokens.</p>
+        </div>
+        <div class="page-actions"><button type="button" class="btn" id="playground-clear-btn"><i class="icon" data-icon="trash"></i><span>Clear chat</span></button></div>
+      </header>
       <div class="playground-layout">
         <!-- Sidebar Config -->
         <div class="playground-sidebar">
@@ -230,13 +232,13 @@
 
           <div class="chat-container" id="playground-chat">
             <div class="message-bubble message-assistant">
-              👋 <strong>LLMHub Playground ready.</strong> Pick who answers on the left, type a message below, and press <em>Send</em> (or <kbd>Ctrl+Enter</kbd>). Above the chat you will see which model actually answered, how long it took and how many tokens it used.
+              <strong>Playground ready.</strong> Pick who answers on the left, type a message below, and press <em>Send</em> (or <kbd>Ctrl+Enter</kbd>). Above the chat you will see which model actually answered, how long it took and how many tokens it used.
             </div>
           </div>
 
           <div class="chat-input-row">
             <textarea class="textarea chat-input" id="playground-input" placeholder="Type your message here... (Ctrl+Enter to send)"></textarea>
-            <button type="button" class="btn btn-primary" id="playground-send-btn" style="min-width:120px">Send Prompt</button>
+            <button type="button" class="btn btn-primary" id="playground-send-btn" style="min-width:120px">Send</button>
           </div>
         </div>
       </div>
@@ -244,6 +246,13 @@
 
     <!-- TAB 3: MODELS FLEET -->
     <section class="panel" data-panel="models">
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">Models</h1>
+          <p class="page-desc">Every model the hub can route to, with its status, quota windows and capabilities.</p>
+        </div>
+        <div class="page-actions"><button type="button" class="btn" id="btn-reload-registry"><i class="icon" data-icon="refresh"></i><span>Reload registry</span></button></div>
+      </header>
       <div class="models-toolbar">
         <div class="models-filters">
           <div class="chips-group" id="models-status-chips">
@@ -266,13 +275,13 @@
             <option value="">All Providers</option>
           </select>
 
-          <input type="search" class="input" id="models-search-input" placeholder="Search provider, model, account..." style="width:200px">
+          <input type="search" class="input toolbar-search" id="models-search-input" placeholder="Search provider, model, account">
           <span class="text-muted" id="models-filter-count" style="font-size:0.8rem">-</span>
         </div>
 
         <div class="chips-group">
-          <button type="button" class="filter-chip active" id="models-view-grid" title="Card Grid View">⊞ Cards</button>
-          <button type="button" class="filter-chip" id="models-view-table" title="Dense Table View">☰ Table</button>
+          <button type="button" class="filter-chip active" id="models-view-grid" title="Cards"><i class="icon" data-icon="grid"></i>Cards</button>
+          <button type="button" class="filter-chip" id="models-view-table" title="Table"><i class="icon" data-icon="list"></i>Table</button>
         </div>
       </div>
 
@@ -283,28 +292,33 @@
 
     <!-- TAB 4: ROUTING & MATRIX -->
     <section class="panel" data-panel="routing">
-      <!-- Plain English Explanation Banner -->
-      <div class="section-card" style="margin-bottom:1.5rem; background:linear-gradient(135deg, rgba(99,102,241,0.06), rgba(56,189,248,0.06)); border-color:rgba(99,102,241,0.2)">
-        <div style="font-weight:700; font-size:1.05rem; margin-bottom:0.4rem; color:var(--text-primary)">
-          🧭 What are Routing Aliases?
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">Routing & Matrix</h1>
+          <p class="page-desc">Aliases pick a free model per request and fall back down their preference list when a vendor says no.</p>
         </div>
-        <p style="font-size:0.88rem; color:var(--text-secondary); line-height:1.6">
-          A <strong>Routing Alias</strong> (like <code>auto</code>, <code>fast</code>, <code>vision</code>, <code>strong</code>) is a named routing profile defined in <code>~/.llmhub/providers.yaml</code>.
-          When your app asks for <code>"model": "auto"</code>, the gateway rotates calls across the models in its <strong>preference list</strong>, spreading traffic across the top candidates according to the <strong>spread</strong> setting (least-recently-used).
-          You can edit any alias profile below to reorder preferences, add or remove models, and tune candidate spread.
+        <div class="page-actions"><button type="button" class="btn" onclick="document.getElementById('routing-simulator').scrollIntoView({behavior:'smooth'})"><i class="icon" data-icon="play"></i><span>Simulate a request</span></button></div>
+      </header>
+      <div class="callout">
+        <i class="icon" data-icon="info"></i>
+        <p>
+          A <strong>routing alias</strong> (<code>auto</code>, <code>fast</code>, <code>vision</code>, <code>strong</code>) is a profile from
+          <code>~/.llmhub/providers.yaml</code>. A call with <code>"model": "auto"</code> rotates across the alias's
+          <strong>preference list</strong>, spreading traffic over the top <strong>spread</strong> candidates, least recently used first.
+          Edit a profile below to reorder, add or remove models.
         </p>
       </div>
 
       <div class="section-header">
-        <h2 style="font-size:1.15rem; font-weight:700">Configured Routing Profiles</h2>
+        <span class="section-title">Configured profiles</span>
       </div>
       <div class="aliases-grid" id="routing-aliases-grid">
         <!-- Populated by v2.js -->
       </div>
 
       <!-- Simulator -->
-      <div class="simulator-box">
-        <h3 style="font-size:1.1rem; font-weight:700; margin-bottom:0.5rem">🔮 Interactive Routing Simulator</h3>
+      <div class="simulator-box" id="routing-simulator">
+        <h3 class="section-title" style="margin-bottom:0.35rem">Routing simulator</h3>
         <p class="text-secondary" style="font-size:0.85rem; margin-bottom:1rem">
           Simulate how llmhub selects a candidate based on estimated prompt tokens, required capabilities, and live quota room.
         </p>
@@ -339,18 +353,20 @@
 
     <!-- TAB 5: QUEUE & JOBS -->
     <section class="panel" data-panel="queue">
-      <div class="kpi-grid" id="queue-summary-bar" style="margin-bottom:1.5rem">
-        <!-- Injected by v2.js -->
-      </div>
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">Queue</h1>
+          <p class="page-desc">Async jobs waiting for a quota window, and the share of workers each app gets.</p>
+        </div>
+        <div class="page-actions"><button type="button" class="btn" onclick="loadJobs()"><i class="icon" data-icon="refresh"></i><span>Refresh</span></button></div>
+      </header>
+      <div class="kpi-grid" id="queue-summary-bar"></div>
       <div class="section-card">
         <div class="section-header">
-          <span class="section-title">Async Jobs Queue & App Control</span>
-          <div style="display:flex; gap:0.5rem; align-items:center">
-            <div class="chips-group">
-              <button type="button" class="filter-chip active" id="queue-view-table" title="Dense Table View">☰ Table</button>
-              <button type="button" class="filter-chip" id="queue-view-cards" title="Card View">⊞ Cards</button>
-            </div>
-            <button type="button" class="btn btn-sm" onclick="loadJobs()">↻ Refresh</button>
+          <span class="section-title">Jobs and apps</span>
+          <div class="chips-group">
+            <button type="button" class="filter-chip active" id="queue-view-table" title="Table"><i class="icon" data-icon="list"></i>Table</button>
+            <button type="button" class="filter-chip" id="queue-view-cards" title="Cards"><i class="icon" data-icon="grid"></i>Cards</button>
           </div>
         </div>
         <div id="queue-jobs-list"></div>
@@ -359,30 +375,24 @@
 
     <!-- TAB 6: ACCOUNTS -->
     <section class="panel" data-panel="accounts">
-      <div class="section-header">
-        <div>
-          <h2 style="font-size:1.15rem; font-weight:700">Configured Provider Accounts</h2>
-          <p class="text-secondary" style="font-size:0.85rem">Keys reside safely in <code>~/.llmhub/env/</code> and are never returned or logged.</p>
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">Accounts</h1>
+          <p class="page-desc">Provider keys and CLI logins. Keys stay in <code>~/.llmhub/env/</code> and are never returned or logged.</p>
         </div>
-        <div style="display:flex; gap:0.5rem; align-items:center">
-          <div class="chips-group">
-            <button type="button" class="filter-chip active" id="accounts-view-cards" title="Card Grid View">⊞ Cards</button>
-            <button type="button" class="filter-chip" id="accounts-view-table" title="Table View">☰ Table</button>
-          </div>
-          <button type="button" class="btn btn-primary" onclick="document.getElementById('modal-quick-add').classList.add('open')">+ Quick Add Account</button>
+        <div class="page-actions">
+          <button type="button" class="btn" id="btn-run-sweep-accounts" onclick="runAvailabilitySweep()"><i class="icon" data-icon="check"></i><span>Run availability sweep</span></button>
+          <button type="button" class="btn btn-primary" onclick="document.getElementById('modal-quick-add').classList.add('open')"><i class="icon" data-icon="plus"></i><span>Add account</span></button>
         </div>
-      </div>
-
-      <!-- Health Sweep Banner -->
-      <div class="section-card" style="margin-top:1rem; margin-bottom:1rem; background:var(--bg-surface)">
-        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.75rem">
-          <div>
-            <span style="font-weight:600; font-size:0.9rem">🛡️ Availability Health Verification:</span>
-            <span class="text-muted" style="font-size:0.8rem; margin-left:0.5rem" id="sweep-summary-text">
-              Probes one model per account, then every free model; the hub repeats this on its own.
-            </span>
-          </div>
-          <button type="button" class="btn btn-sm" id="btn-run-sweep-accounts" onclick="runAvailabilitySweep()">⚡ Run Availability Sweep</button>
+      </header>
+      <div class="toolbar-row">
+        <div class="callout callout-inline">
+          <i class="icon" data-icon="shield"></i>
+          <p id="sweep-summary-text">Probes one model per account, then every free model; the hub repeats this on its own.</p>
+        </div>
+        <div class="chips-group">
+          <button type="button" class="filter-chip active" id="accounts-view-cards" title="Cards"><i class="icon" data-icon="grid"></i>Cards</button>
+          <button type="button" class="filter-chip" id="accounts-view-table" title="Table"><i class="icon" data-icon="list"></i>Table</button>
         </div>
       </div>
 
@@ -391,7 +401,14 @@
 
     <!-- TAB 7: PROMOS & SCOUT -->
     <section class="panel" data-panel="promos">
-      <div class="section-card" id="scout-status-card" style="margin-bottom:1.5rem">
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">Promos & Scout</h1>
+          <p class="page-desc">Free-tier offers the scout found, and what was done with each one.</p>
+        </div>
+        <div class="page-actions"><button type="button" class="btn btn-primary" id="run-scout-btn" onclick="triggerScoutRun()"><i class="icon" data-icon="radar"></i><span>Run scout now</span></button></div>
+      </header>
+      <div class="section-card" id="scout-status-card" style="margin-bottom:1.25rem">
         <!-- Injected by v2.js -->
       </div>
 
@@ -411,13 +428,13 @@
             <option value="">All Providers</option>
           </select>
 
-          <input type="search" class="input" id="promos-search-input" placeholder="Search provider or note..." style="width:200px">
+          <input type="search" class="input toolbar-search" id="promos-search-input" placeholder="Search provider or note">
           <span class="text-muted" id="promos-filter-count" style="font-size:0.8rem">-</span>
         </div>
 
         <div class="chips-group">
-          <button type="button" class="filter-chip active" id="promos-view-cards" title="Card View">⊞ Cards</button>
-          <button type="button" class="filter-chip" id="promos-view-table" title="Table View">☰ Table</button>
+          <button type="button" class="filter-chip active" id="promos-view-cards" title="Cards"><i class="icon" data-icon="grid"></i>Cards</button>
+          <button type="button" class="filter-chip" id="promos-view-table" title="Table"><i class="icon" data-icon="list"></i>Table</button>
         </div>
       </div>
 
@@ -426,8 +443,14 @@
 
     <!-- TAB 8: USAGE & ESTIMATED SAVINGS -->
     <section class="panel" data-panel="usage">
-      <!-- Savings Hero Card -->
-      <div class="section-card" id="savings-hero-card" style="margin-bottom:1.5rem; background:linear-gradient(135deg, rgba(16,185,129,0.06), rgba(56,189,248,0.06)); border-color:rgba(16,185,129,0.25)">
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">Usage & Savings</h1>
+          <p class="page-desc">Tokens per model, and what the same traffic would have cost at published list prices.</p>
+        </div>
+        <div class="page-actions"><button type="button" class="btn" onclick="loadUsage()"><i class="icon" data-icon="refresh"></i><span>Refresh</span></button></div>
+      </header>
+      <div class="section-card hero-card" id="savings-hero-card">
         <div style="display:flex; justify-content:space-between; align-items:flex-start; flex-wrap:wrap; gap:1rem">
           <div>
             <div style="font-size:0.75rem; text-transform:uppercase; letter-spacing:0.05em; color:var(--text-muted); font-weight:700">
@@ -469,11 +492,8 @@
       <!-- Per-Model Usage Table -->
       <div class="section-card">
         <div class="section-header">
-          <span class="section-title">Per-Model Token Breakdown</span>
-          <div style="display:flex; gap:0.5rem; align-items:center">
-            <input type="search" class="input" id="usage-search-input" placeholder="Search model..." style="width:180px">
-            <button type="button" class="btn btn-sm" onclick="loadUsage()">↻ Refresh</button>
-          </div>
+          <span class="section-title">Tokens per model</span>
+          <input type="search" class="input toolbar-search" id="usage-search-input" placeholder="Search model">
         </div>
         <div id="usage-table-container" class="table-container">
           <!-- Injected by v2.js -->
@@ -483,6 +503,16 @@
 
     <!-- TAB 9: EVENTS LOG -->
     <section class="panel ev-panel" data-panel="events">
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">Events</h1>
+          <p class="page-desc">Every attempt the gateway made and every event it wrote, on one timeline.</p>
+        </div>
+        <div class="page-actions">
+          <button type="button" class="btn" data-export="csv" title="Download the rows in view"><i class="icon" data-icon="download"></i><span>CSV</span></button>
+          <button type="button" class="btn" data-export="json" title="Download the rows in view"><i class="icon" data-icon="download"></i><span>JSON</span></button>
+        </div>
+      </header>
       <div class="ev-toolbar">
         <div class="chips-group" id="ev-ranges" role="group" aria-label="Time range"></div>
         <div class="chips-group" id="ev-kinds" role="group" aria-label="What to list">
@@ -497,9 +527,7 @@
         <label class="ev-check" title="Fold the attempts of one request (fallbacks) into one row"><input type="checkbox" id="ev-chains"> Group retries</label>
         <span class="ev-spacer"></span>
         <button type="button" class="ev-live-btn" id="ev-live" aria-pressed="true" title="Refresh every 5 s while this tab is open"><span class="pulse-dot"></span> Live</button>
-        <button type="button" class="btn btn-sm" id="ev-refresh" title="Reload now">↻</button>
-        <button type="button" class="btn btn-sm" data-export="csv" title="Download the rows in view">CSV</button>
-        <button type="button" class="btn btn-sm" data-export="json" title="Download the rows in view">JSON</button>
+        <button type="button" class="icon-btn" id="ev-refresh" title="Reload now" aria-label="Reload now"><i class="icon" data-icon="refresh"></i></button>
       </div>
       <div class="ev-active" id="ev-active"></div>
       <div class="ev-kpis" id="ev-kpis"></div>
@@ -528,18 +556,25 @@
 
     <!-- TAB 10: RECORDER -->
     <section class="panel rec-panel" data-panel="recorder">
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">Recorder</h1>
+          <p class="page-desc">What each app sent and what came back. Kept in memory only and cleared on every start.</p>
+        </div>
+        <div class="page-actions">
+          <button type="button" class="btn rec-focus-btn" id="recorder-focus" title="Hide the console chrome (Esc to leave)">Full screen</button>
+          <button type="button" class="btn btn-primary" id="recorder-toggle">Start recording</button>
+        </div>
+      </header>
       <div class="rec-toolbar">
-        <span class="section-title">Prompt Recorder</span>
         <span class="rec-state" id="recorder-state">off</span>
-        <button type="button" class="btn btn-primary btn-sm" id="recorder-toggle">Start recording</button>
         <select class="select" id="recorder-minutes" title="Recording window">
           <option value="5">5 min</option>
           <option value="20" selected>20 min</option>
           <option value="60">60 min</option>
         </select>
         <span class="text-muted rec-meta" id="recorder-meta"></span>
-        <span class="rec-info text-muted" title="What each app actually sent and what came back. Off unless you turn it on, kept in memory only, cleared every time you start it, and gone when the hub restarts. Reading this tab needs the token from another device, unlike the rest of the console.">memory only · cleared on start · ⓘ</span>
-        <button type="button" class="btn btn-sm rec-focus-btn" id="recorder-focus" title="Hide the console chrome (Esc to leave)">Full screen</button>
+        <span class="rec-info text-muted" title="Off unless you turn it on, kept in memory only, cleared every time you start it, and gone when the hub restarts. Reading this tab needs the token from another device, unlike the rest of the console.">reading it from another device needs the token</span>
       </div>
 
       <div class="rec-sessions" id="recorder-sessions" aria-label="Sessions"></div>
@@ -550,12 +585,14 @@
     </section>
 
   </main>
+  </div>
+  </div>
 
   <!-- Live Calls Inspector Drawer -->
   <aside class="live-drawer" id="live-drawer">
     <div class="drawer-header">
-      <span style="font-weight:600; font-size:0.9rem">⚡ In-Flight Gateway Calls</span>
-      <button type="button" class="btn btn-sm" id="live-drawer-close">✕</button>
+      <span class="section-title">Calls in flight</span>
+      <button type="button" class="icon-btn" id="live-drawer-close" aria-label="Close"><i class="icon" data-icon="x"></i></button>
     </div>
     <div class="drawer-body" id="live-drawer-calls">
       <!-- Injected by v2.js -->
@@ -566,8 +603,8 @@
   <div class="modal-backdrop" id="modal-quick-add">
     <div class="modal-dialog">
       <div class="modal-header">
-        <h3 style="font-size:1.1rem; font-weight:700">Quick Add Account</h3>
-        <button type="button" class="btn btn-sm modal-close">✕</button>
+        <h3 class="section-title">Add account</h3>
+        <button type="button" class="icon-btn modal-close" aria-label="Close"><i class="icon" data-icon="x"></i></button>
       </div>
       <div class="modal-body">
         <div class="form-group">
@@ -591,8 +628,8 @@
   <div class="modal-backdrop" id="modal-edit-alias">
     <div class="modal-dialog" style="max-width:620px">
       <div class="modal-header">
-        <h3 style="font-size:1.1rem; font-weight:700" id="mea-title">Edit Alias Profile</h3>
-        <button type="button" class="btn btn-sm modal-close">✕</button>
+        <h3 class="section-title" id="mea-title">Edit Alias Profile</h3>
+        <button type="button" class="icon-btn modal-close" aria-label="Close"><i class="icon" data-icon="x"></i></button>
       </div>
       <div class="modal-body">
         <div class="form-group">
@@ -612,7 +649,7 @@
           <label class="form-label" for="mea-add-model">Add Model to Preference List</label>
           <div style="display:flex; gap:0.5rem">
             <select class="select" id="mea-add-model" style="flex:1"></select>
-            <button type="button" class="btn" id="mea-add-btn">+ Add</button>
+            <button type="button" class="btn" id="mea-add-btn"><i class="icon" data-icon="plus"></i>Add</button>
           </div>
         </div>
       </div>

@@ -75,6 +75,15 @@ for the record but have no tags: those commits are not part of this repository.
 
 ### Changed
 
+- Console layout: a grouped sidebar (Overview, Playground; Gateway: Models, Routing, Queue;
+  Sources: Accounts, Promos; Observability: Usage, Events, Recorder) replaces the row of ten
+  tabs, and a slim top bar carries a page and model search (Ctrl K), the gateway status, the
+  theme switch and the token. Every page opens with a title, one line on what it shows and
+  its one or two actions; the Quick Actions bar is gone and its buttons moved to the pages
+  they belong to. Emoji are replaced by line icons. KPI tiles wrap their facts instead of
+  cutting them off ("144 dis..."), and the console has no horizontal scroll from 390 px up,
+  in both themes; below 960 px the sidebar becomes a drawer. Element ids, `switchTab` and
+  the `.nav-item[data-tab]` / `.panel[data-panel]` contract are unchanged.
 - Antigravity (`agy`) quota parks cover the whole model group on both logins: a refusal on
   any Gemini id parks every Gemini id, a refusal on a Claude or GPT id parks that group.
   Parks from an older build spread at startup. The hub reads `agy -p /quota` at startup and

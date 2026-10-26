@@ -94,8 +94,67 @@
   window.LLMHub = {
     api: (path, options) => api(path, options),
     notify: (message, type) => notify(message, type),
-    activeTab: () => state.activeTab
+    activeTab: () => state.activeTab,
+    icon: (name) => icon(name)
   };
+
+  // Line icons (Lucide geometry, 24px grid). Inlined rather than <use href="#...">: the page
+  // runs under <base href="./">, which a query string turns into an external reference.
+  const ICONS = {
+    overview: '<rect width="7" height="9" x="3" y="3" rx="1"/><rect width="7" height="5" x="14" y="3" rx="1"/><rect width="7" height="9" x="14" y="12" rx="1"/><rect width="7" height="5" x="3" y="16" rx="1"/>',
+    playground: '<path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect x="3" y="3" width="18" height="18" rx="2"/>',
+    models: '<path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>',
+    routing: '<circle cx="12" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9v2c0 .6-.4 1-1 1H7c-.6 0-1-.4-1-1V9"/><path d="M12 12v3"/>',
+    queue: '<path d="m12 2 10 5-10 5L2 7Z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/>',
+    accounts: '<path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"/><circle cx="16.5" cy="7.5" r=".5"/>',
+    promos: '<path d="M12.586 2.586A2 2 0 0 0 11.172 2H4a2 2 0 0 0-2 2v7.172a2 2 0 0 0 .586 1.414l8.704 8.704a2.426 2.426 0 0 0 3.42 0l6.58-6.58a2.426 2.426 0 0 0 0-3.42z"/><circle cx="7.5" cy="7.5" r=".5"/>',
+    usage: '<path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M18 17V9"/><path d="M13 17V5"/><path d="M8 17v-3"/>',
+    events: '<path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/>',
+    recorder: '<circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="3"/>',
+    menu: '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
+    search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>',
+    refresh: '<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+    moon: '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
+    key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.5 7.5 3 3L22 7l-3-3"/>',
+    check: '<circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/>',
+    plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+    trash: '<path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>',
+    grid: '<rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/>',
+    list: '<path d="M3 12h.01"/><path d="M3 18h.01"/><path d="M3 6h.01"/><path d="M8 12h13"/><path d="M8 18h13"/><path d="M8 6h13"/>',
+    play: '<polygon points="6 3 20 12 6 21 6 3"/>',
+    stop: '<rect x="5" y="5" width="14" height="14" rx="2"/>',
+    info: '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+    shield: '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+    radar: '<path d="M19.07 4.93A10 10 0 0 0 6.99 3.34"/><path d="M4 6h.01"/><path d="M2.29 9.62A10 10 0 1 0 21.31 8.35"/><path d="M16.24 7.76A6 6 0 1 0 8.23 16.67"/><path d="M12 18h.01"/><path d="M17.99 11.66A6 6 0 0 1 15.77 16.67"/><circle cx="12" cy="12" r="2"/><path d="m13.41 10.59 5.66-5.66"/>',
+    download: '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>',
+    up: '<path d="m18 15-6-6-6 6"/>',
+    down: '<path d="m6 9 6 6 6-6"/>',
+    x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+    alert: '<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    edit: '<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/>',
+    sparkle: '<path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/><path d="m5.6 5.6 2.1 2.1"/><path d="m16.3 16.3 2.1 2.1"/><path d="m5.6 18.4 2.1-2.1"/><path d="m16.3 7.7 2.1-2.1"/>'
+  };
+
+  function icon(name) {
+    const body = ICONS[name];
+    if (!body) return '';
+    return `<svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${body}</svg>`;
+  }
+
+  function hydrateIcons(root) {
+    (root || document).querySelectorAll('i.icon[data-icon]').forEach(el => {
+      el.outerHTML = icon(el.dataset.icon);
+    });
+  }
+
+  // a button with an icon keeps it: only the label span changes
+  function setButtonLabel(btn, text) {
+    if (!btn) return;
+    const label = btn.querySelector('span');
+    if (label) label.textContent = text;
+    else btn.textContent = text;
+  }
 
   // --- Notifications / Toast ---
   function notify(message, type = 'info') {
@@ -231,7 +290,8 @@
     }
     const themeBtn = document.getElementById('theme-toggle');
     if (themeBtn) {
-      themeBtn.innerHTML = state.theme === 'light' ? '🌙 Dark' : '☀️ Light';
+      themeBtn.innerHTML = icon(state.theme === 'light' ? 'moon' : 'sun');
+      themeBtn.title = state.theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme';
     }
   }
 
@@ -649,7 +709,7 @@
         <span class="rec-dot"></span>
         <span class="rec-pane-title">${escapeHtml(app)}</span>
         <span class="rec-pane-meta"></span>
-        <button type="button" class="rec-pane-close" title="Hide this session">✕</button>
+        <button type="button" class="rec-pane-close" title="Hide this session" aria-label="Hide this session">${icon('x')}</button>
       </div>
       <div class="rec-pane-body"></div>
       <button type="button" class="rec-jump" hidden>↓ new</button>`;
@@ -965,6 +1025,7 @@
         renderAccounts();
         populatePlaygroundModels();
         updateTopMetrics();
+        updateNavCounts();
       }
     } catch (e) {
       console.error('Error loading status:', e);
@@ -1026,6 +1087,7 @@
         state.jobs = data.jobs || [];
         state.queueDepth = data.queue?.depth_by_state || {};
       }
+      updateNavCounts();
       if (appsRes.ok) {
         const data = await appsRes.json();
         state.apps = data.apps || [];
@@ -1045,6 +1107,7 @@
       if (promosRes.ok) state.promos = (await promosRes.json()).promos || [];
       if (scoutRes.ok) state.scoutStatus = await scoutRes.json();
       renderPromos();
+      updateNavCounts();
     } catch (e) {
       console.error('Error loading promos:', e);
     }
@@ -1154,6 +1217,20 @@
   }
   window.switchTab = switchTab;
 
+  // A KPI tile: label, one number with its unit, and a wrapping row of small facts. Nothing in
+  // it is nowrap except the number, so a long count wraps instead of being cut off.
+  function kpiCard({ title, iconName, value, unit, tone, meta, tooltip }) {
+    const facts = (meta || []).map(([text, cls, hint]) =>
+      `<span class="kpi-fact ${cls || ''}"${hint ? ` title="${escapeHtml(hint)}"` : ''}>${escapeHtml(text)}</span>`
+    ).join('');
+    return `
+      <div class="kpi-card"${tooltip ? ` title="${escapeHtml(tooltip)}"` : ''}>
+        <div class="kpi-title"><span>${escapeHtml(title)}</span>${iconName ? icon(iconName) : ''}</div>
+        <div class="kpi-value ${tone ? 'tone-' + tone : ''}"><span class="kpi-num">${escapeHtml(String(value))}</span>${unit ? `<span class="kpi-unit">${escapeHtml(unit)}</span>` : ''}</div>
+        ${facts ? `<div class="kpi-sub">${facts}</div>` : ''}
+      </div>`;
+  }
+
   // --- RENDER: OVERVIEW & LIVE (Item 1) ---
   function renderOverview() {
     if (!state.status) return;
@@ -1170,54 +1247,46 @@
 
     const kpiContainer = document.getElementById('overview-kpis');
     if (kpiContainer) {
-      kpiContainer.innerHTML = `
-        <div class="kpi-card">
-          <div class="kpi-title">Fleet Readiness <span>⚡</span></div>
-          <div class="kpi-value" style="color: var(--status-ready)">${ready} <span style="font-size:1rem; color:var(--text-muted)">/ ${models.length}</span></div>
-          <div class="kpi-sub">
-            <span style="color:var(--status-cooldown)">${cooldown} cooldown</span> •
-            <span style="color:var(--status-depleted)">${exhausted} exhausted</span> •
-            <span title="never answered yet: the health sweep probes these first">${unverified} unverified</span> •
-            <span>${disabled} disabled</span>
-          </div>
-        </div>
-
-        <div class="kpi-card">
-          <div class="kpi-title">Today's Traffic <span>📊</span></div>
-          <div class="kpi-value">${formatNumber(reqsToday)} <span style="font-size:0.9rem; color:var(--text-muted)">reqs</span></div>
-          <div class="kpi-sub">
-            <span>${formatTokens(tokensOutToday)} out</span> • <span>${formatTokens(tokensInToday)} in</span>
-          </div>
-        </div>
-
-        <div class="kpi-card">
-          <div class="kpi-title">In-Flight Activity <span>🛰️</span></div>
-          <div class="kpi-value" style="color: ${state.inFlightTotal > 0 ? '#38bdf8' : 'var(--text-primary)'}">
-            ${state.inFlightTotal} <span style="font-size:0.9rem; color:var(--text-muted)">active streams</span>
-          </div>
-          <div class="kpi-sub">
-            <span>Fair-share workers: 6 slots</span>
-          </div>
-        </div>
-
-        <div class="kpi-card" title="${escapeHtml(discoveryTitle(state.status.discovery))}">
-          <div class="kpi-title">New Models <span>🆕</span></div>
-          <div class="kpi-value">${(state.status.discovery?.new_models || []).filter(m => m.enabled).length} <span style="font-size:0.9rem; color:var(--text-muted)">ready</span></div>
-          <div class="kpi-sub">
-            <span title="listed by a vendor with no proven free tier, not registered">${state.status.discovery?.offered_count || 0} offered</span> •
-            <span style="color:var(--status-depleted)">${(state.status.discovery?.vanished || []).length} gone</span> •
-            <span>Next: ${state.status.discovery?.next_run_at ? formatCountdown(state.status.discovery.next_run_at) : 'off'}</span>
-          </div>
-        </div>
-
-        <div class="kpi-card">
-          <div class="kpi-title">Scout Intel <span>🎯</span></div>
-          <div class="kpi-value">${state.promos ? state.promos.filter(p => p.status === 'new').length : 0} <span style="font-size:0.9rem; color:var(--text-muted)">new leads</span></div>
-          <div class="kpi-sub">
-            <span>Next: ${state.scoutStatus?.next_run_at ? formatCountdown(state.scoutStatus.next_run_at) : 'Daily 08:00'}</span>
-          </div>
-        </div>
-      `;
+      const discovery = state.status.discovery || {};
+      const newReady = (discovery.new_models || []).filter(m => m.enabled).length;
+      const newLeads = state.promos ? state.promos.filter(p => p.status === 'new').length : 0;
+      const live = state.inFlightTotal;
+      kpiContainer.innerHTML = [
+        kpiCard({
+          title: 'Fleet readiness', iconName: 'check',
+          value: ready, unit: `/ ${models.length} ready`, tone: ready > 0 ? 'good' : 'bad',
+          meta: [
+            [`${cooldown} cooldown`, cooldown ? 'warn' : ''],
+            [`${exhausted} exhausted`, exhausted ? 'bad' : ''],
+            [`${unverified} unverified`, '', 'never answered yet: the health sweep probes these first'],
+            [`${disabled} disabled`, '']
+          ]
+        }),
+        kpiCard({
+          title: "Today's traffic", iconName: 'usage',
+          value: formatNumber(reqsToday), unit: 'requests',
+          meta: [[`${formatTokens(tokensInToday)} in`, ''], [`${formatTokens(tokensOutToday)} out`, '']]
+        }),
+        kpiCard({
+          title: 'In flight', iconName: 'events',
+          value: live, unit: live === 1 ? 'call' : 'calls', tone: live > 0 ? 'live' : '',
+          meta: [['fair-share workers: 6 slots', '']]
+        }),
+        kpiCard({
+          title: 'New models', iconName: 'models', tooltip: discoveryTitle(discovery),
+          value: newReady, unit: 'ready',
+          meta: [
+            [`${discovery.offered_count || 0} offered`, '', 'listed by a vendor with no proven free tier, not registered'],
+            [`${(discovery.vanished || []).length} gone`, (discovery.vanished || []).length ? 'bad' : ''],
+            [`next ${discovery.next_run_at ? formatCountdown(discovery.next_run_at) : 'off'}`, '']
+          ]
+        }),
+        kpiCard({
+          title: 'Scout', iconName: 'radar',
+          value: newLeads, unit: newLeads === 1 ? 'new lead' : 'new leads',
+          meta: [[`next ${state.scoutStatus?.next_run_at ? formatCountdown(state.scoutStatus.next_run_at) : 'daily 08:00'}`, '']]
+        })
+      ].join('');
     }
 
     // Top models table
@@ -1454,7 +1523,7 @@
           </div>
         ` : failure ? `
           <div style="font-size:0.72rem; color:var(--status-depleted); background:var(--status-depleted-bg); padding:4px 8px; border-radius:4px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(failure.text)} (${escapeHtml(failure.when)})">
-            ⚠️ ${escapeHtml(failure.text)}${failure.when ? ` <span class="text-muted">· ${escapeHtml(failure.when)}</span>` : ''}
+            ${icon('alert')} ${escapeHtml(failure.text)}${failure.when ? ` <span class="text-muted">· ${escapeHtml(failure.when)}</span>` : ''}
           </div>
         ` : ''}
 
@@ -1464,7 +1533,7 @@
             <span>${formatTokens(m.usage_today?.out_tokens || 0)} tok</span>
           </div>
           <div class="model-card-actions">
-            <button type="button" class="btn btn-sm" data-action="playground" data-key="${escapeHtml(key)}" title="Test in Playground">▶ Play</button>
+            <button type="button" class="btn btn-sm" data-action="playground" data-key="${escapeHtml(key)}" title="Test in Playground">${icon('play')}Play</button>
             <button type="button" class="btn btn-sm" data-action="forgive" data-key="${escapeHtml(key)}" title="Forgive Quota Window">Forgive</button>
             <button type="button" class="btn btn-sm" data-action="test-model" data-provider="${escapeHtml(m.provider)}" data-account="${escapeHtml(m.account)}" data-model="${escapeHtml(m.model)}" title="Test Single Call">Test</button>
             <button type="button" class="btn btn-sm" data-action="toggle-disable" data-key="${escapeHtml(key)}" data-disabled="${m.disabled ? '1' : '0'}">
@@ -1611,7 +1680,7 @@
               </span>
             </div>
             <button type="button" class="btn btn-sm" onclick="openEditAliasModal('${escapeHtml(aliasName)}')">
-              ✏️ Edit Profile
+              ${icon('edit')}Edit profile
             </button>
           </div>
 
@@ -1697,9 +1766,9 @@
             <span class="font-mono">${escapeHtml(key)}</span>
           </span>
           <div style="display:flex; gap:4px">
-            <button type="button" class="btn btn-sm" onclick="moveAliasPrefer(${idx}, -1)" ${idx === 0 ? 'disabled' : ''} title="Move Up">▲</button>
-            <button type="button" class="btn btn-sm" onclick="moveAliasPrefer(${idx}, 1)" ${idx === state.editingAlias.prefer.length - 1 ? 'disabled' : ''} title="Move Down">▼</button>
-            <button type="button" class="btn btn-sm btn-danger" onclick="removeAliasPrefer(${idx})" title="Remove">✕</button>
+            <button type="button" class="btn btn-sm" onclick="moveAliasPrefer(${idx}, -1)" ${idx === 0 ? 'disabled' : ''} title="Move up" aria-label="Move up">${icon('up')}</button>
+            <button type="button" class="btn btn-sm" onclick="moveAliasPrefer(${idx}, 1)" ${idx === state.editingAlias.prefer.length - 1 ? 'disabled' : ''} title="Move down" aria-label="Move down">${icon('down')}</button>
+            <button type="button" class="btn btn-sm btn-danger" onclick="removeAliasPrefer(${idx})" title="Remove" aria-label="Remove">${icon('x')}</button>
           </div>
         </div>
       `).join('');
@@ -1839,7 +1908,7 @@
 
     if (eligible.length === 0) {
       resultBox.innerHTML = `
-        <div style="color:var(--status-depleted); font-weight:600">❌ No eligible candidates would match this request!</div>
+        <div style="color:var(--status-depleted); font-weight:600">No eligible candidate matches this request.</div>
         <div class="text-muted" style="font-size:0.8rem; margin-top:4px">Gateway would answer with HTTP 429 or 413.</div>
       `;
     } else {
@@ -2064,7 +2133,7 @@
     assistantMsg.className = 'message-bubble message-assistant streaming-cursor';
     assistantMsg.innerHTML = `
       <details open class="reasoning-box" style="display:none;">
-        <summary>💭 Thinking Process</summary>
+        <summary>Thinking</summary>
         <div class="reasoning-text"></div>
       </details>
       <div class="stream-content"></div>
@@ -2078,7 +2147,7 @@
 
     const sendBtn = document.getElementById('playground-send-btn');
     if (sendBtn) {
-      sendBtn.textContent = '⏹ Stop';
+      sendBtn.innerHTML = `${icon('stop')}Stop`;
       sendBtn.className = 'btn btn-danger';
     }
 
@@ -2203,7 +2272,7 @@
       state.playground.inFlight = false;
       state.playground.abortController = null;
       if (sendBtn) {
-        sendBtn.textContent = 'Send Prompt';
+        sendBtn.textContent = 'Send';
         sendBtn.className = 'btn btn-primary';
       }
       loadStatus();
@@ -2238,10 +2307,10 @@
         <div class="accounts-grid">
           ${accounts.map(acc => {
             const keyStatus = acc.key_present
-              ? '<span class="status-badge status-ready">🔑 Key Set</span>'
+              ? '<span class="status-badge status-ready">Key set</span>'
               : acc.kind === 'cli'
               ? '<span class="status-badge" style="background:rgba(192,132,252,0.15); color:var(--cap-vision)">CLI Auth</span>'
-              : '<span class="status-badge status-depleted">⚠️ No Key</span>';
+              : '<span class="status-badge status-depleted">No key</span>';
 
             const lastProbe = acc.last_checked_at
               ? `${formatTimeAgo(acc.last_checked_at)} (${acc.last_status || 'unknown'})`
@@ -2268,15 +2337,15 @@
                 </div>
 
                 <div style="font-size:0.75rem; color:var(--text-secondary); background:var(--bg-input); padding:4px 8px; border-radius:4px">
-                  <span>🛡️ Last Health Probe: <strong>${escapeHtml(lastProbe)}</strong></span>
-                  ${acc.last_error ? `<div style="color:var(--status-depleted); margin-top:2px">⚠️ ${escapeHtml(acc.last_error)}</div>` : ''}
+                  <span>Last health probe: <strong>${escapeHtml(lastProbe)}</strong></span>
+                  ${acc.last_error ? `<div style="color:var(--status-depleted); margin-top:2px">${escapeHtml(acc.last_error)}</div>` : ''}
                 </div>
 
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-top:0.5rem; padding-top:0.5rem; border-top:1px solid var(--border-subtle)">
                   <span class="text-muted" style="font-size:0.75rem">Env: <code>${escapeHtml(acc.api_key_env || 'none')}</code></span>
                   <div style="display:flex; gap:6px">
-                    <button type="button" class="btn btn-sm" onclick="testAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">⚡ Test</button>
-                    <button type="button" class="btn btn-sm" onclick="discoverAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">🔍 Discover</button>
+                    <button type="button" class="btn btn-sm" onclick="testAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">Test</button>
+                    <button type="button" class="btn btn-sm" onclick="discoverAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">Discover</button>
                   </div>
                 </div>
               </div>
@@ -2315,10 +2384,10 @@
             <tbody>
               ${sorted.map(acc => {
                 const keyStatus = acc.key_present
-                  ? '<span class="status-badge status-ready">🔑 Set</span>'
+                  ? '<span class="status-badge status-ready">Set</span>'
                   : acc.kind === 'cli'
                   ? '<span class="status-badge" style="background:rgba(192,132,252,0.15); color:var(--cap-vision)">CLI</span>'
-                  : '<span class="status-badge status-depleted">⚠️ No Key</span>';
+                  : '<span class="status-badge status-depleted">No key</span>';
 
                 const probeStatus = acc.last_status === 'ok'
                   ? '<span class="status-badge status-ready">OK</span>'
@@ -2338,8 +2407,8 @@
                     <td>${probeStatus}</td>
                     <td>
                       <div style="display:flex; gap:4px">
-                        <button type="button" class="btn btn-sm" onclick="testAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">⚡ Test</button>
-                        <button type="button" class="btn btn-sm" onclick="discoverAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">🔍 Discover</button>
+                        <button type="button" class="btn btn-sm" onclick="testAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">Test</button>
+                        <button type="button" class="btn btn-sm" onclick="discoverAccount('${escapeHtml(acc.provider)}', '${escapeHtml(acc.account)}')">Discover</button>
                       </div>
                     </td>
                   </tr>
@@ -2356,8 +2425,8 @@
   window.runAvailabilitySweep = async function () {
     const btn1 = document.getElementById('btn-health-sweep');
     const btn2 = document.getElementById('btn-run-sweep-accounts');
-    if (btn1) { btn1.disabled = true; btn1.textContent = '⏳ Checking...'; }
-    if (btn2) { btn2.disabled = true; btn2.textContent = '⏳ Checking...'; }
+    if (btn1) { btn1.disabled = true; setButtonLabel(btn1, 'Checking…'); }
+    if (btn2) { btn2.disabled = true; setButtonLabel(btn2, 'Checking…'); }
 
     notify('Starting availability sweep: one probe per account, then every free model...', 'info');
 
@@ -2385,8 +2454,8 @@
     } catch (e) {
       notify('Health sweep request error: ' + e.message, 'error');
     } finally {
-      if (btn1) { btn1.disabled = false; btn1.textContent = '⚡ Check Availability'; }
-      if (btn2) { btn2.disabled = false; btn2.textContent = '⚡ Run Availability Sweep'; }
+      if (btn1) { btn1.disabled = false; setButtonLabel(btn1, 'Check availability'); }
+      if (btn2) { btn2.disabled = false; setButtonLabel(btn2, 'Run availability sweep'); }
     }
   };
 
@@ -2471,24 +2540,12 @@
 
     const summaryEl = document.getElementById('queue-summary-bar');
     if (summaryEl) {
-      summaryEl.innerHTML = `
-        <div class="kpi-card" style="padding:0.75rem 1rem">
-          <div class="kpi-title">Workers Total</div>
-          <div class="kpi-value" style="font-size:1.4rem">6 slots</div>
-        </div>
-        <div class="kpi-card" style="padding:0.75rem 1rem">
-          <div class="kpi-title">Waiting Quota</div>
-          <div class="kpi-value" style="font-size:1.4rem; color:var(--status-cooldown)">${depth.waiting_quota || 0}</div>
-        </div>
-        <div class="kpi-card" style="padding:0.75rem 1rem">
-          <div class="kpi-title">Running</div>
-          <div class="kpi-value" style="font-size:1.4rem; color:#38bdf8">${depth.running || 0}</div>
-        </div>
-        <div class="kpi-card" style="padding:0.75rem 1rem">
-          <div class="kpi-title">Queued</div>
-          <div class="kpi-value" style="font-size:1.4rem">${depth.queued || 0}</div>
-        </div>
-      `;
+      summaryEl.innerHTML = [
+        kpiCard({ title: 'Workers', iconName: 'queue', value: 6, unit: 'slots' }),
+        kpiCard({ title: 'Waiting for quota', value: depth.waiting_quota || 0, tone: depth.waiting_quota ? 'warn' : '' }),
+        kpiCard({ title: 'Running', value: depth.running || 0, tone: depth.running ? 'live' : '' }),
+        kpiCard({ title: 'Queued', value: depth.queued || 0 })
+      ].join('');
     }
 
     const listEl = document.getElementById('queue-jobs-list');
@@ -2612,11 +2669,10 @@
       scoutBox.innerHTML = `
         <div style="display:flex; justify-content:space-between; align-items:center;">
           <div>
-            <div style="font-size:0.75rem; color:var(--text-muted); text-transform:uppercase">Scout Daemon Status</div>
+            <div class="kpi-title">Scout daemon</div>
             <div style="font-size:1.1rem; font-weight:700">${scout.last_run ? `Last run: ${scout.last_run.status} (${scout.last_run.promos_found || 0} offers found)` : 'Scheduled Daily (08:00)'}</div>
             <div class="text-secondary" style="font-size:0.8rem">Next scan: ${scout.next_run_at ? formatCountdown(scout.next_run_at) : 'scheduled'}</div>
           </div>
-          <button type="button" class="btn btn-primary" id="run-scout-btn" onclick="triggerScoutRun()">⚡ Run Scout Now</button>
         </div>
       `;
     }
@@ -3273,8 +3329,168 @@
     });
   }
 
+  // --- Shell: sidebar, global search, nav counts ---
+  function updateNavCounts() {
+    const set = (id, n, title) => {
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.textContent = n ? formatNumber(n) : '';
+      el.title = n ? title : '';
+    };
+    const models = state.status?.models || [];
+    set('nav-count-models', models.filter(m => m.status === 'ok').length, 'models ready');
+    const depth = state.queueDepth || {};
+    set('nav-count-queue', (depth.queued || 0) + (depth.waiting_quota || 0) + (depth.running || 0), 'jobs queued or running');
+    set('nav-count-promos', (state.promos || []).filter(p => p.status === 'new').length, 'new leads');
+  }
+
+  function setSidebar(open) {
+    document.body.classList.toggle('sidebar-open', open);
+    const scrim = document.getElementById('sidebar-scrim');
+    if (scrim) scrim.hidden = !open;
+    document.getElementById('sidebar-toggle')?.setAttribute('aria-expanded', String(open));
+  }
+
+  function searchIndex() {
+    const pages = [...document.querySelectorAll('.nav-item[data-tab]')].map(btn => {
+      const tab = btn.dataset.tab;
+      const panel = document.querySelector(`.panel[data-panel="${tab}"]`);
+      return {
+        kind: 'page',
+        label: btn.querySelector('span')?.textContent.trim() || tab,
+        hint: panel?.querySelector('.page-desc')?.textContent.trim() || '',
+        tab,
+        iconName: tab
+      };
+    });
+    const models = (state.status?.models || []).map(m => ({
+      kind: 'model',
+      label: m.key,
+      hint: `${m.status}${m.disabled ? ' · disabled' : ''}`,
+      key: m.key,
+      iconName: 'models'
+    }));
+    return pages.concat(models);
+  }
+
+  function runSearch(query) {
+    const q = query.trim().toLowerCase();
+    if (!q) return [];
+    const parts = q.split(/\s+/);
+    return searchIndex()
+      .filter(item => parts.every(p => `${item.label} ${item.hint}`.toLowerCase().includes(p)))
+      .sort((a, b) => (a.kind === b.kind ? 0 : a.kind === 'page' ? -1 : 1) || a.label.localeCompare(b.label))
+      .slice(0, 12);
+  }
+
+  function setupGlobalSearch() {
+    const input = document.getElementById('global-search');
+    const box = document.getElementById('global-search-results');
+    if (!input || !box) return;
+    let results = [];
+    let cursor = 0;
+
+    const close = () => {
+      box.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
+    };
+    const draw = () => {
+      if (!input.value.trim()) return close();
+      box.innerHTML = results.length
+        ? results.map((r, i) => `
+            <button type="button" class="search-hit ${i === cursor ? 'active' : ''}" role="option" aria-selected="${i === cursor}" data-index="${i}">
+              ${icon(r.iconName)}
+              <span class="search-hit-label">${escapeHtml(r.label)}</span>
+              <span class="search-hit-hint">${escapeHtml(r.kind === 'page' ? 'page' : r.hint)}</span>
+            </button>`).join('')
+        : '<div class="search-empty">No page or model matches.</div>';
+      box.hidden = false;
+      input.setAttribute('aria-expanded', 'true');
+    };
+    const pick = (item) => {
+      if (!item) return;
+      if (item.kind === 'page') {
+        switchTab(item.tab);
+      } else {
+        switchTab('models');
+        const field = document.getElementById('models-search-input');
+        if (field) {
+          field.value = item.key;
+          field.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }
+      input.value = '';
+      close();
+      input.blur();
+      setSidebar(false);
+    };
+
+    input.addEventListener('input', () => {
+      results = runSearch(input.value);
+      cursor = 0;
+      draw();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault();
+        if (!results.length) return;
+        cursor = (cursor + (e.key === 'ArrowDown' ? 1 : -1) + results.length) % results.length;
+        draw();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        pick(results[cursor]);
+      } else if (e.key === 'Escape') {
+        input.value = '';
+        close();
+        input.blur();
+      }
+    });
+    input.addEventListener('focus', () => { if (input.value.trim()) draw(); });
+    box.addEventListener('mousedown', (e) => {
+      const hit = e.target.closest('.search-hit');
+      if (!hit) return;
+      e.preventDefault();
+      pick(results[Number(hit.dataset.index)]);
+    });
+    input.addEventListener('blur', () => setTimeout(close, 100));
+    document.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        input.focus();
+        input.select();
+      }
+    });
+  }
+
+  function setupShell() {
+    hydrateIcons();
+    document.getElementById('sidebar-toggle')?.addEventListener('click', () => {
+      setSidebar(!document.body.classList.contains('sidebar-open'));
+    });
+    document.getElementById('sidebar-scrim')?.addEventListener('click', () => setSidebar(false));
+    document.querySelectorAll('.nav-item[data-tab]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        setSidebar(false);
+        window.scrollTo({ top: 0 });
+      });
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && document.body.classList.contains('sidebar-open')) setSidebar(false);
+    });
+    document.getElementById('playground-clear-btn')?.addEventListener('click', () => {
+      const chat = document.getElementById('playground-chat');
+      if (!chat) return;
+      if (state.playground.inFlight) state.playground.abortController?.abort();
+      while (chat.children.length > 1) chat.lastElementChild.remove();
+      const tel = document.getElementById('playground-telemetry');
+      if (tel) tel.style.display = 'none';
+    });
+    setupGlobalSearch();
+  }
+
   // --- Entrypoint ---
   document.addEventListener('DOMContentLoaded', () => {
+    setupShell();
     initTheme();
     setupEventListeners();
     startPolling();

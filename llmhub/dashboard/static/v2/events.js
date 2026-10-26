@@ -739,7 +739,7 @@
     if (item.type === 'event') return '<span class="text-muted">-</span>';
     if (!item.in_tokens && !item.out_tokens) return '<span class="text-muted">-</span>';
     const est = item.estimated ? '<span class="ev-est" title="estimated: the vendor reported no usage">≈</span>' : '';
-    const cached = item.cached_tokens ? `<span class="ev-cached" title="cached input tokens">⚡${fmtTokens(item.cached_tokens)}</span>` : '';
+    const cached = item.cached_tokens ? `<span class="ev-cached" title="cached input tokens">${fmtTokens(item.cached_tokens)} cached</span>` : '';
     return `${est}<span title="${item.in_tokens} in / ${item.out_tokens} out">${fmtTokens(item.in_tokens)} → <b>${fmtTokens(item.out_tokens)}</b></span>${cached}`;
   }
 
