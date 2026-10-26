@@ -59,7 +59,7 @@ async def dashboard_static(path: str) -> FileResponse:
 
 def _asset_version() -> str:
     stamps = []
-    for name in ("v2/v2.css", "v2/v2.js"):
+    for name in ("v2/v2.css", "v2/v2.js", "v2/events.js"):
         f = STATIC_DIR / name
         if f.is_file():
             stamps.append(int(f.stat().st_mtime))

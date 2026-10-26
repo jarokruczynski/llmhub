@@ -1337,6 +1337,69 @@ def _events() -> list[dict[str, Any]]:
     return out
 
 
+def _activity_calls(since: datetime, limit: int) -> list[dict[str, Any]]:
+    """One row per attempt over the window, with a fallback after every refused call."""
+    rnd = random.Random(int(since.timestamp()) // 3600)
+    keys = [m["key"] for m in STATE["models"]]
+    span = max(60.0, (now() - since).total_seconds())
+    rows: list[dict[str, Any]] = []
+    for _ in range(min(limit, int(span / 25) + 40)):
+        at = now() - timedelta(seconds=rnd.random() * span)
+        app = APPS[min(len(APPS) - 1, int(rnd.random() * rnd.random() * len(APPS)))]
+        key = keys[rnd.randrange(len(keys))]
+        roll = rnd.random()
+        status = "ok" if roll < 0.86 else "quota" if roll < 0.93 else "error" if roll < 0.98 else "abandoned"
+        served = status == "ok"
+        in_tok = rnd.randint(200, 6000) if served else 0
+        out_tok = rnd.randint(20, 1500) if served else 0
+        rows.append(
+            {
+                "ts": iso(at),
+                "app": app,
+                "provider": key.split("/")[0],
+                "account": key.split("/")[0] + "-main",
+                "model": key,
+                "in_tokens": in_tok,
+                "out_tokens": out_tok,
+                "cached_tokens": int(in_tok * 0.6) if served and rnd.random() < 0.3 else 0,
+                "total_tokens": in_tok + out_tok,
+                "latency_ms": int(400 + rnd.random() ** 2 * 40000) if served else rnd.randint(50, 3000),
+                "status": status,
+                "error_code": None if served else "rate_limit" if status == "quota" else "upstream_5xx",
+                "attempt": 1,
+                "estimated": 1 if served and rnd.random() < 0.1 else 0,
+                "stream": 1 if rnd.random() < 0.3 else 0,
+            }
+        )
+        if status in ("quota", "error"):
+            other = keys[(keys.index(key) + 1) % len(keys)]
+            latency = rnd.randint(800, 9000)
+            rows.append(
+                {
+                    **rows[-1],
+                    "ts": iso(at + timedelta(milliseconds=latency)),
+                    "provider": other.split("/")[0],
+                    "account": other.split("/")[0] + "-main",
+                    "model": other,
+                    "in_tokens": 1200,
+                    "out_tokens": 300,
+                    "cached_tokens": 0,
+                    "total_tokens": 1500,
+                    "latency_ms": latency,
+                    "status": "ok",
+                    "error_code": None,
+                    "attempt": 2,
+                    "estimated": 0,
+                    "stream": 0,
+                }
+            )
+    rows = [row for row in rows if row["ts"] <= iso(now())]
+    rows.sort(key=lambda row: row["ts"], reverse=True)
+    for index, row in enumerate(reversed(rows), start=1):
+        row["id"] = index
+    return rows[:limit]
+
+
 def _parse_since(value: str | None, default_days: int = 1) -> datetime:
     if value:
         try:
@@ -2018,6 +2081,28 @@ def create_hub_app() -> FastAPI:
     @app.get("/api/events")
     def events(limit: int = 100) -> dict[str, Any]:
         return {"events": _events()[:limit]}
+
+    @app.get("/api/activity")
+    def activity(
+        since: str | None = None, limit: int = 2000, app_name: str | None = None, model: str | None = None
+    ) -> dict[str, Any]:
+        start = _parse_since(since)
+        calls = _activity_calls(start, limit)
+        events = [row for row in _events() if row["ts"] >= iso(start)][:limit]
+        for index, row in enumerate(events):
+            row["id"] = len(events) - index
+        for key, value in (("app", app_name), ("model", model)):
+            if value:
+                calls = [row for row in calls if row[key] == value]
+                events = [row for row in events if row[key] == value]
+        return {
+            "generated_at": iso(now()),
+            "since": iso(start),
+            "limit": limit,
+            "calls": calls,
+            "events": events,
+            "truncated": {"calls": len(calls) == limit, "events": len(events) == limit},
+        }
 
     @app.get("/api/jobs")
     def jobs(state: str | None = None) -> dict[str, Any]:

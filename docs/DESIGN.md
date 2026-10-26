@@ -256,6 +256,15 @@ candidate may not share the same restriction. A 400 that names no parameter (e.g
 - `GET api/usage?since=ISO&group_by=app|model|account|day&app=` -> rows with tokens/requests/
   errors; `GET api/usage/timeseries?bucket=hour|day&since=` for charts.
 - `GET api/events?limit=` -> recent errors/quota hits/fallbacks (ts, app, model, kind, message).
+- `GET api/activity?since=ISO&limit=&app=&model=` -> {generated_at, since, limit, calls, events,
+  truncated:{calls, events}} - the Events Log tab. `calls` are usage rows newest first, one per
+  attempt (id, ts, app, provider, account, model, in/out/cached/total_tokens, latency_ms, status,
+  error_code, attempt, estimated, stream); `events` the event rows over the same window and
+  filters. `limit` (default 2000, max 5000) caps each list on its own, and `truncated` says
+  which one hit it. A sync row's `ts` is written when the answer is in, a stream row's when its
+  headers arrive, so the console puts a call's start at `ts - latency_ms` or `ts` respectively.
+  Usage rows carry no request id, so the console's "group retries" view pairs attempt n with
+  attempt n-1 of the same app by time; it is labelled as inferred.
 - `GET api/live?window_min=15` -> {generated_at, window_min, in_flight_total, apps:[{app,
   in_flight:[{call_id, state, model, account, kind, elapsed_s, attempt, job_id}],
   recent:[{model, calls, out_tokens}]}]} - calls running right now plus what each app used over

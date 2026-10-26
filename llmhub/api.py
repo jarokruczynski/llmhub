@@ -286,6 +286,32 @@ async def events(request: Request, limit: int = Query(default=100, ge=1, le=1000
     return {"events": hub_of(request).store.events(limit)}
 
 
+ACTIVITY_LIMIT_MAX = 5000
+
+
+@router.get("/activity")
+async def activity(
+    request: Request,
+    since: str | None = None,
+    limit: int = Query(default=2000, ge=1, le=ACTIVITY_LIMIT_MAX),
+    app: str | None = None,
+    model: str | None = None,
+) -> dict[str, Any]:
+    """Every attempt (usage rows) and every event over one window, for the event log."""
+    hub = hub_of(request)
+    since_iso = normalize_since(since)
+    calls = hub.store.calls(limit, since=since_iso, app=app, model=model)
+    events = hub.store.events(limit, since=since_iso, app=app, model=model)
+    return {
+        "generated_at": now_iso(),
+        "since": since_iso,
+        "limit": limit,
+        "calls": calls,
+        "events": events,
+        "truncated": {"calls": len(calls) == limit, "events": len(events) == limit},
+    }
+
+
 @router.get("/jobs")
 async def jobs(request: Request, state: str | None = None, app: str | None = None) -> dict[str, Any]:
     hub = hub_of(request)

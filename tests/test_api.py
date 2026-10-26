@@ -128,6 +128,76 @@ async def test_events_and_promos(client: httpx.AsyncClient, hub: Hub) -> None:
     assert promos[0]["status"] == "new"
 
 
+async def test_activity_lists_calls_and_events_over_one_window(client: httpx.AsyncClient, hub: Hub) -> None:
+    old = hub.store.start_usage(
+        app="my-app",
+        provider="alpha",
+        account="a1",
+        model="alpha/m1",
+        status="ok",
+        latency_ms=10,
+        attempt=1,
+        ts="2020-01-01T00:00:00+00:00",
+    )
+    first = hub.store.start_usage(
+        app="my-app",
+        provider="alpha",
+        account="a1",
+        model="alpha/m1",
+        status="quota",
+        latency_ms=40,
+        attempt=1,
+        error_code="rate_limit",
+    )
+    second = hub.store.start_usage(
+        app="my-app",
+        provider="beta",
+        account="b1",
+        model="beta/m2",
+        status="ok",
+        latency_ms=1500,
+        attempt=2,
+        stream=True,
+    )
+    hub.store.update_usage_tokens(second, in_tokens=120, out_tokens=30, cached_tokens=8)
+    hub.store.start_usage(
+        app="other", provider="alpha", account="a1", model="alpha/m1", status="ok", latency_ms=5, attempt=1
+    )
+    hub.store.add_event(kind="fallback", message="alpha/m1 -> beta/m2", app="my-app", model="alpha/m1")
+
+    res = await client.get("/api/activity", params={"since": "2024-01-01T00:00:00Z", "app": "my-app"})
+    assert res.status_code == 200
+    data = res.json()
+    ids = [row["id"] for row in data["calls"]]
+    assert ids == [second, first]
+    assert old not in ids
+    newest = data["calls"][0]
+    assert (newest["model"], newest["latency_ms"], newest["attempt"], newest["stream"]) == (
+        "beta/m2",
+        1500,
+        2,
+        1,
+    )
+    assert (newest["in_tokens"], newest["out_tokens"], newest["cached_tokens"], newest["total_tokens"]) == (
+        120,
+        30,
+        8,
+        150,
+    )
+    assert data["calls"][1]["error_code"] == "rate_limit"
+    assert [event["kind"] for event in data["events"]] == ["fallback"]
+    assert data["truncated"] == {"calls": False, "events": False}
+
+    capped = (await client.get("/api/activity", params={"limit": 1})).json()
+    assert len(capped["calls"]) == 1
+    assert capped["truncated"]["calls"] is True
+
+    by_model = (await client.get("/api/activity", params={"model": "beta/m2"})).json()
+    assert [row["id"] for row in by_model["calls"]] == [second]
+
+    assert (await client.get("/api/activity", params={"since": "yesterday"})).status_code == 400
+
+
 async def test_lan_read_open_mutation_needs_token(client: httpx.AsyncClient, hub: Hub) -> None:
     lan = {"X-Forwarded-For": "192.168.1.44"}
     assert (await client.get("/api/status", headers=lan)).status_code == 200

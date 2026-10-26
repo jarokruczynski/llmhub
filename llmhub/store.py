@@ -390,6 +390,16 @@ def parse_iso(value: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
+def activity_filter(*, since: str | None, app: str | None, model: str | None) -> tuple[str, list[Any]]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    for column, op, value in (("ts", ">=", since), ("app", "=", app), ("model", "=", model)):
+        if value:
+            clauses.append(f"{column} {op} ?")
+            params.append(value)
+    return (f" WHERE {' AND '.join(clauses)}" if clauses else ""), params
+
+
 class Store:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
@@ -540,8 +550,35 @@ class Store:
             (now_iso(), app, model, account, kind, message[:2000]),
         )
 
-    def events(self, limit: int = 100) -> list[dict[str, Any]]:
-        return self.query("SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,))
+    def events(
+        self,
+        limit: int = 100,
+        *,
+        since: str | None = None,
+        app: str | None = None,
+        model: str | None = None,
+    ) -> list[dict[str, Any]]:
+        where, params = activity_filter(since=since, app=app, model=model)
+        return self.query(f"SELECT * FROM events{where} ORDER BY id DESC LIMIT ?", (*params, limit))
+
+    def calls(
+        self,
+        limit: int = 1000,
+        *,
+        since: str | None = None,
+        app: str | None = None,
+        model: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """One row per attempt, newest first: who called which model, for how long, for how much."""
+        where, params = activity_filter(since=since, app=app, model=model)
+        return self.query(
+            f"""
+            SELECT id, ts, app, provider, account, model, in_tokens, out_tokens, cached_tokens,
+                   total_tokens, latency_ms, status, error_code, attempt, estimated, stream
+            FROM usage{where} ORDER BY id DESC LIMIT ?
+            """,
+            (*params, limit),
+        )
 
     def window_usage(self, account: str, model: str, since: datetime) -> dict[str, int]:
         """Tokens and calls this (account, model) spent in the window.

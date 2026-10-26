@@ -33,7 +33,6 @@
       search: ''
     },
     scoutStatus: null,
-    events: [],
     views: {
       models: localStorage.getItem('llmhub_view_models') || 'cards',
       queue: localStorage.getItem('llmhub_view_queue') || 'table',
@@ -90,6 +89,13 @@
     }
     return res;
   }
+
+  // the event log lives in events.js and borrows the authenticated fetch from here
+  window.LLMHub = {
+    api: (path, options) => api(path, options),
+    notify: (message, type) => notify(message, type),
+    activeTab: () => state.activeTab
+  };
 
   // --- Notifications / Toast ---
   function notify(message, type = 'info') {
@@ -1044,17 +1050,8 @@
     }
   }
 
-  async function loadEvents() {
-    try {
-      const res = await api('api/events?limit=100');
-      if (res.ok) {
-        const data = await res.json();
-        state.events = data.events || [];
-        renderEvents();
-      }
-    } catch (e) {
-      console.error('Error loading events:', e);
-    }
+  function loadEvents() {
+    if (window.LLMHubEvents) window.LLMHubEvents.load();
   }
 
   async function refreshAll() {
@@ -1067,7 +1064,7 @@
       loadUsage(),
       loadJobs(),
       loadPromos(),
-      loadEvents()
+      state.activeTab === 'events' ? loadEvents() : null
     ]);
     if (btn) setTimeout(() => btn.classList.remove('spinning'), 400);
     notify('Dashboard updated', 'success');
@@ -1081,7 +1078,6 @@
     loadUsage();
     loadJobs();
     loadPromos();
-    loadEvents();
 
     clearInterval(state.livePollTimer);
     state.livePollTimer = setInterval(() => {
@@ -1093,7 +1089,6 @@
       loadStatus();
       if (state.activeTab === 'queue') loadJobs();
       if (state.activeTab === 'promos') loadPromos();
-      if (state.activeTab === 'events') loadEvents();
     }, 15000);
   }
 
@@ -1143,7 +1138,10 @@
     if (tabId === 'queue') loadJobs();
     if (tabId === 'accounts') renderAccounts();
     if (tabId === 'promos') loadPromos();
-    if (tabId === 'events') loadEvents();
+    if (window.LLMHubEvents) {
+      if (tabId === 'events') window.LLMHubEvents.show();
+      else window.LLMHubEvents.hide();
+    }
     document.body.classList.toggle('rec-wide', tabId === 'recorder');
     if (tabId === 'recorder') {
       loadRecorder();
@@ -2893,45 +2891,6 @@
             </td>
           </tr>
         </tfoot>
-      </table>
-    `;
-  }
-
-  // --- RENDER: EVENTS LOG ---
-  function renderEvents() {
-    const events = state.events || [];
-    const listEl = document.getElementById('events-list');
-    if (!listEl) return;
-
-    if (events.length === 0) {
-      listEl.innerHTML = '<div class="text-muted" style="padding:2rem; text-align:center">No error or quota events recorded.</div>';
-      return;
-    }
-
-    listEl.innerHTML = `
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Time</th>
-            <th>Type</th>
-            <th>Model / Key</th>
-            <th>App</th>
-            <th>Message / Error Details</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${events.map(ev => `
-            <tr>
-              <td class="text-muted" style="font-size:0.75rem">${formatTimeAgo(ev.created_at)}</td>
-              <td><span class="status-badge status-${ev.kind === 'quota' ? 'depleted' : ev.kind === 'retry' ? 'cooldown' : 'disabled'}">${escapeHtml(ev.kind)}</span></td>
-              <td class="font-mono">${escapeHtml(ev.model || '-')}</td>
-              <td><span class="cap-tag">${escapeHtml(ev.app || '-')}</span></td>
-              <td style="max-width:350px; overflow:hidden; text-overflow:ellipsis; font-size:0.78rem" title="${escapeHtml(ev.message || ev.error_body || '')}">
-                ${escapeHtml(ev.message || ev.error_body || '-')}
-              </td>
-            </tr>
-          `).join('')}
-        </tbody>
       </table>
     `;
   }

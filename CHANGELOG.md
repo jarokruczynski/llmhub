@@ -12,6 +12,16 @@ for the record but have no tags: those commits are not part of this repository.
 
 ### Added
 
+- Events Log rebuilt as an interactive activity log: every attempt (model, app, account,
+  duration, tokens in/out/cached, tok/s, status, attempt number) and every event on one
+  timeline, from the new `GET api/activity`. Time range chips, kind/app/model filters and
+  search, KPIs for the filtered view (success rate, tokens, p50/p95 latency, output speed,
+  model time), a stacked per-status chart with hover details and drag-to-zoom, a sortable
+  per-model leaderboard, expandable rows with a waterfall of nearby attempts and the events
+  around them, optional grouping of a request's fallback attempts, live refresh every 5 s,
+  keyboard navigation and CSV/JSON export. The old tab read a `created_at` field events never
+  had, so every row showed "Never"; its refresh button called a function that was not global.
+
 - Scheduled model discovery: every provider's own listing (`GET /models`, the template's
   endpoint, or `<command> models` per CLI login) is diffed against the registry at start and
   every `LLMHUB_DISCOVERY_EVERY_H` hours. New models are registered when the listing proves them

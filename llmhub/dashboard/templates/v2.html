@@ -482,11 +482,45 @@
     </section>
 
     <!-- TAB 9: EVENTS LOG -->
-    <section class="panel" data-panel="events">
+    <section class="panel ev-panel" data-panel="events">
+      <div class="ev-toolbar">
+        <div class="chips-group" id="ev-ranges" role="group" aria-label="Time range"></div>
+        <div class="chips-group" id="ev-kinds" role="group" aria-label="What to list">
+          <button type="button" class="filter-chip active" data-kind="all">All <span class="ev-count"></span></button>
+          <button type="button" class="filter-chip" data-kind="calls">Calls <span class="ev-count"></span></button>
+          <button type="button" class="filter-chip" data-kind="problems">Problems <span class="ev-count"></span></button>
+          <button type="button" class="filter-chip" data-kind="events">Events <span class="ev-count"></span></button>
+        </div>
+        <select class="select ev-select" id="ev-app" aria-label="App"></select>
+        <select class="select ev-select" id="ev-model" aria-label="Model"></select>
+        <input type="search" class="input ev-search" id="ev-search" placeholder="Search model, app, error…  ( / )" aria-label="Search">
+        <label class="ev-check" title="Fold the attempts of one request (fallbacks) into one row"><input type="checkbox" id="ev-chains"> Group retries</label>
+        <span class="ev-spacer"></span>
+        <button type="button" class="ev-live-btn" id="ev-live" aria-pressed="true" title="Refresh every 5 s while this tab is open"><span class="pulse-dot"></span> Live</button>
+        <button type="button" class="btn btn-sm" id="ev-refresh" title="Reload now">↻</button>
+        <button type="button" class="btn btn-sm" data-export="csv" title="Download the rows in view">CSV</button>
+        <button type="button" class="btn btn-sm" data-export="json" title="Download the rows in view">JSON</button>
+      </div>
+      <div class="ev-active" id="ev-active"></div>
+      <div class="ev-kpis" id="ev-kpis"></div>
+      <div class="ev-warn" id="ev-truncated" hidden></div>
+      <div class="section-card ev-chart-card">
+        <div class="section-header">
+          <span class="section-title">Timeline</span>
+          <span class="ev-zoom" id="ev-zoom" hidden>zoom: <span></span> <button type="button" class="btn btn-sm" id="ev-zoom-reset">Reset (Esc)</button></span>
+          <span class="text-muted ev-stamp" id="ev-stamp"></span>
+        </div>
+        <div class="ev-chart" id="ev-chart"><div class="ev-tip" id="ev-tip" hidden></div></div>
+        <div class="ev-legend" id="ev-legend"></div>
+      </div>
+      <details class="section-card ev-board-card" open>
+        <summary class="section-title">Models in view <span class="text-muted ev-hint">click a row to filter</span></summary>
+        <div class="table-container" id="ev-board"></div>
+      </details>
       <div class="section-card">
         <div class="section-header">
-          <span class="section-title">System, Quota & Error Audit Events</span>
-          <button type="button" class="btn btn-sm" onclick="loadEvents()">↻ Refresh</button>
+          <span class="section-title">Calls &amp; events <span class="text-muted ev-hint" id="ev-rowcount"></span></span>
+          <span class="text-muted ev-hint">click a row for details · ↑↓ / j k to move · Enter to open</span>
         </div>
         <div id="events-list" class="table-container"></div>
       </div>
@@ -591,5 +625,6 @@
 
   <!-- Scripts -->
   <script src="static/v2/v2.js?v={{ asset_v }}"></script>
+  <script src="static/v2/events.js?v={{ asset_v }}"></script>
 </body>
 </html>

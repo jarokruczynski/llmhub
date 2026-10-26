@@ -44,6 +44,10 @@ async def test_dashboard_v2_static_assets(client: httpx.AsyncClient) -> None:
     assert "text/javascript" in res_js.headers.get("content-type", "")
     assert "LLMHub Modern Studio" in res_js.text
 
+    res_events = await client.get("/static/v2/events.js")
+    assert res_events.status_code == 200
+    assert "api/activity" in res_events.text
+
     # Via /v2/static prefix
     res_v2_static = await client.get("/v2/static/v2/v2.css")
     assert res_v2_static.status_code == 200
