@@ -395,10 +395,11 @@ async def test_all_candidates_too_large_returns_413(client: httpx.AsyncClient, h
     response = await client.post("/v1/chat/completions", json=body, headers={"X-Hub-App": "my-app"})
 
     assert response.status_code == 413
-    assert response.headers["x-hub-max-request"] == "5"
+    # the room left for input once the reserved output is counted against the cap of 5
+    assert response.headers["x-hub-max-request"] == "0"
     error = response.json()["error"]
     assert error["type"] == "too_large"
-    assert error["max_request_tokens"] == 5
+    assert error["max_request_tokens"] == 0
     assert len(error["rejected"]) == 2
     assert all(row["reason"] == "too_large" for row in error["rejected"])
 

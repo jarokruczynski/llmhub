@@ -489,16 +489,18 @@ def test_input_ceiling_is_context_minus_output(hub: Hub) -> None:
 def test_input_ceiling_takes_the_smallest_known_bound(hub: Hub) -> None:
     entry = entry_of(hub, "alpha/m1", "alpha-1")  # context: 100000
     entry.model.max_request_tokens = 8000
-    assert entry.input_ceiling(est_out=500, observed=5000) == 5000
-    assert entry.input_ceiling(est_out=500, observed=9000) == 8000
-    assert entry.input_ceiling(est_out=500, observed=None) == 8000
+    # request caps count the reserved output, so the input gets the cap minus est_out
+    assert entry.input_ceiling(est_out=500, observed=5000) == 4500
+    assert entry.input_ceiling(est_out=500, observed=9000) == 7500
+    assert entry.input_ceiling(est_out=500, observed=None) == 7500
 
 
 def test_input_ceiling_ignores_a_non_positive_context_minus_output(hub: Hub) -> None:
     entry = entry_of(hub, "alpha/m1", "alpha-1")  # context: 100000
     assert entry.input_ceiling(est_out=100000, observed=None) is None
     entry.model.max_request_tokens = 3000
-    assert entry.input_ceiling(est_out=100000, observed=None) == 3000
+    # an output reservation over the request cap leaves no room for any input
+    assert entry.input_ceiling(est_out=100000, observed=None) == 0
 
 
 def test_input_ceiling_unknown_everywhere_is_none(hub: Hub) -> None:
@@ -513,7 +515,7 @@ def test_oversized_candidate_is_rejected_and_next_candidate_wins(hub: Hub) -> No
     assert keys(selection)[0] == ("beta/m2", "beta-1")
     row = next(item for item in selection.rejected if item["reason"] == "too_large")
     assert row["model"] == "alpha/m1"
-    assert row["detail"] == 50
+    assert row["detail"] == 40  # the cap minus the reserved output
     assert row["requested_in"] == 200
 
 
@@ -554,7 +556,7 @@ async def test_recorded_request_cap_is_skipped_by_the_next_selection(hub: Hub) -
     assert ("alpha/m1", "alpha-2") in keys(selection)
     row = next(item for item in selection.rejected if item["account"] == "alpha-1")
     assert row["reason"] == "too_large"
-    assert row["detail"] == 8000
+    assert row["detail"] == 7990  # the cap minus the reserved output
 
 
 async def test_in_flight_registers_the_call_and_clears_it_after(hub: Hub) -> None:
@@ -1368,3 +1370,13 @@ async def test_the_budget_follows_the_candidate_being_tried(hub: Hub) -> None:
     hub.router.retry_delays = ()
     result = await hub.router.run([fast, slow], call, budget_s=0.1)
     assert result.entry is slow
+
+
+def test_groq_style_cap_counts_the_reserved_output(hub: Hub) -> None:
+    # "Limit 8000, Requested 10616": 6616 prompt tokens plus max_tokens 4000
+    hub.store.record_request_cap("alpha-1", "alpha/m1", 8000, source="groq")
+    selection = hub.router.select(model_request="alpha/m1", est_in=7800, est_out=300, now=NOW)
+    assert ("alpha/m1", "alpha-1") not in keys(selection)
+    row = next(item for item in selection.rejected if item["account"] == "alpha-1")
+    assert row["reason"] == "too_large"
+    assert row["detail"] == 7700

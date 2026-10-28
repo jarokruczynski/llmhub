@@ -325,15 +325,19 @@ class Entry:
         fallback would silently hide capacity the same way a missing `context` used to (see
         the request size awareness note in DESIGN.md).
         """
-        candidates = [self.model.max_request_tokens]
+        # A per-request cap counts the reserved output too: groq's TPM refusal reads
+        # "Limit 8000, Requested 10616" for 6616 prompt tokens plus max_tokens 4000, and a
+        # "maximum context length" body means the same. Comparing the cap with the input
+        # alone sent hundreds of requests to a candidate that refused every one.
+        candidates: list[int] = []
         if self.model.context is not None:
             room = self.model.context - est_out
             if room > 0:
                 candidates.append(room)
-        if observed is not None:
-            candidates.append(observed)
-        known = [value for value in candidates if value is not None]
-        return min(known) if known else None
+        for cap in (self.model.max_request_tokens, observed):
+            if cap is not None:
+                candidates.append(max(cap - est_out, 0))
+        return min(candidates) if candidates else None
 
 
 def _positive_int(env: dict[str, str], name: str, default: int) -> int:

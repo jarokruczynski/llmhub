@@ -497,7 +497,10 @@ def estimate_request_cost(body: dict[str, Any]) -> tuple[int, int]:
     prompt = body.get("prompt")
     if isinstance(prompt, str):
         chars += len(prompt)
-    est_in = chars // 4
+    # Measured on Polish transcripts with o200k: 3.2 characters per token (2.9 at worst).
+    # chars/4 is an English rule of thumb and undercounted by up to a third, which let
+    # requests through to candidates whose request cap they then exceeded.
+    est_in = chars // 3
     max_tokens = body.get("max_tokens") or body.get("max_completion_tokens")
     est_out = int(max_tokens) if isinstance(max_tokens, (int, float)) and max_tokens else 4096
     return est_in, est_out

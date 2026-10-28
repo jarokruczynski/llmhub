@@ -106,7 +106,7 @@ def test_mark_exhausted_until_next_reset_and_forgive(hub: Hub) -> None:
 
 def test_estimate_request_cost() -> None:
     body = {"messages": [{"role": "user", "content": "x" * 400}], "max_tokens": 256}
-    assert estimate_request_cost(body) == (100, 256)
+    assert estimate_request_cost(body) == (133, 256)  # chars // 3
     body_default = {"messages": [{"role": "user", "content": "x" * 8}]}
     assert estimate_request_cost(body_default) == (2, 4096)
 
