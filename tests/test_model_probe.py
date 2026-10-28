@@ -62,13 +62,16 @@ def prober_for(
     """A prober whose vendor answers from `answers` by model key; unknown keys succeed."""
     probed: list[str] = []
 
-    async def fake_probe(_hub: Hub, entry, prompt: str = "ping") -> dict:
+    async def fake_probe(_hub: Hub, entry, prompt: str = "ping", body: dict | None = None) -> dict:
         probed.append(entry.key)
         return answers.get(entry.key, {"ok": True, "status": "ok", "latency_ms": 1})
 
     monkeypatch.setattr("llmhub.api.probe_entry", fake_probe)
     prober = ModelProber(hub)
-    hub.settings = Settings(**{**hub.settings.__dict__, "model_probe_gap_s": 0.0})
+    # the json capability probe has its own tests; here every call is a liveness probe
+    hub.settings = Settings(
+        **{**hub.settings.__dict__, "model_probe_gap_s": 0.0, "model_probe_json_every_h": 0}
+    )
     return prober, probed
 
 

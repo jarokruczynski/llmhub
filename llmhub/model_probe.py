@@ -18,11 +18,20 @@ A key or wallet refusal is a fact about the account, not the model. Probing the 
 the account one by one would be a pile of certain failures, so the first suspicious refusal is
 confirmed on two more models and, when they say the same, the rest of the account is parked in
 one step and carries one due date.
+
+The same walk also learns the `json` capability for pairs the catalog does not mark with it
+(discovered models get only `text`). One json_schema request with a tiny schema; an answer that
+parses and matches is the proof, and the router then counts the pair as `json`. A verdict holds
+for `model_probe_json_every_h`; a call that never got a verdict (quota, timeout, transport) is
+asked again soon. A failed probe only withholds the learned cap, catalog caps stay as written.
+cli backends and opt-in-only accounts are never asked: they ignore response_format or are kept
+out of automatic traffic on purpose.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 from dataclasses import dataclass, field
@@ -55,6 +64,59 @@ BALANCE_TEXTS = (
 )
 PROBE_TIMEOUT_S = 60.0
 
+JSON_CAP = "json"
+# the question names no format on purpose: a model that ignores response_format answers in prose
+JSON_PROBE_PROMPT = "Is the sky blue on a clear day? Answer in one word."
+JSON_PROBE_MAX_TOKENS = 64
+JSON_PROBE_SCHEMA = {
+    "type": "object",
+    "properties": {"answer": {"type": "string", "enum": ["yes", "no"]}},
+    "required": ["answer"],
+    "additionalProperties": False,
+}
+# outcomes that are a verdict on the capability; anything else is asked again after RETRY_AFTER
+JSON_VERDICT_STATUSES = ("truncated", "unsupported_param")
+
+
+def json_probe_body(model_id: str) -> dict[str, Any]:
+    return {
+        "model": model_id,
+        "messages": [{"role": "user", "content": JSON_PROBE_PROMPT}],
+        "max_tokens": JSON_PROBE_MAX_TOKENS,
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "probe", "strict": True, "schema": JSON_PROBE_SCHEMA},
+        },
+    }
+
+
+def json_answer_ok(content: str) -> bool:
+    """The answer is a JSON object the schema accepts. No fence stripping: a vendor that honours
+    response_format sends bare JSON, and a fenced one is exactly the prose case."""
+    try:
+        value = json.loads(content.strip())
+    except ValueError:
+        return False
+    if not isinstance(value, dict) or set(value) != {"answer"}:
+        return False
+    answer = value.get("answer")
+    return isinstance(answer, str) and answer.strip().lower() in ("yes", "no")
+
+
+def json_verdict(result: dict[str, Any]) -> tuple[bool | None, str]:
+    """(verdict, status) of one json probe; verdict None means the call proved nothing."""
+    if result.get("ok"):
+        if json_answer_ok(str(result.get("content") or result.get("sample") or "")):
+            return True, "ok"
+        return False, "not_json"
+    status = str(result.get("status") or "error")
+    if status in JSON_VERDICT_STATUSES:
+        return False, status
+    if status == "error" and result.get("http_status") == 400:
+        # a plain bad request to a ping that worked: the vendor refused the response_format
+        return False, "rejected"
+    return None, status
+
 
 def account_level(result: dict[str, Any]) -> bool:
     """True when the refusal names the key or the wallet rather than the model.
@@ -85,6 +147,8 @@ class ProbeRun:
     failed: int = 0
     skipped: dict[str, int] = field(default_factory=dict)
     accounts_parked: list[str] = field(default_factory=list)
+    json_probed: int = 0
+    json_ok: int = 0
     running: bool = True
 
     def skip(self, reason: str) -> None:
@@ -101,6 +165,8 @@ class ProbeRun:
             "failed": self.failed,
             "skipped": dict(self.skipped),
             "accounts_parked": list(self.accounts_parked),
+            "json_probed": self.json_probed,
+            "json_ok": self.json_ok,
         }
 
 
@@ -112,10 +178,16 @@ class ModelProber:
         self._stopping = asyncio.Event()
         self.current: ProbeRun | None = None
         self.last: ProbeRun | None = None
+        # pairs the last due_entries() listed only for a json probe: their liveness is proven
+        self.json_only: set[tuple[str, str]] = set()
 
     @property
     def every_h(self) -> int:
         return int(self.hub.settings.model_probe_every_h)
+
+    @property
+    def json_every_h(self) -> int:
+        return int(self.hub.settings.model_probe_json_every_h)
 
     @property
     def running(self) -> bool:
@@ -133,13 +205,34 @@ class ModelProber:
             return "disabled"
         return None
 
+    def json_due(self, entry: Entry, rows: dict[tuple[str, str], dict[str, Any]], now: datetime) -> bool:
+        """The pair should be asked about `json`: the catalog does not say so and no verdict holds."""
+        if self.json_every_h <= 0 or entry.is_cli or entry.opt_in_only:
+            return False
+        if JSON_CAP in entry.model.caps:
+            return False
+        row = rows.get((entry.account_id, entry.key))
+        return row is None or parse_iso(str(row["next_due_ts"])) <= now
+
     def due_entries(self, now: datetime) -> tuple[list[Entry], dict[str, int]]:
         """Pairs whose proof has run out, never-probed first and then oldest first."""
         hub = self.hub
         disabled = hub.store.disabled_models()
         parked = hub.store.unavailable_all(now)
         probes = hub.store.model_probes_all()
+        json_rows = hub.store.learned_caps_rows(JSON_CAP)
+        json_only: list[tuple[str, Entry]] = []
+        self.json_only = set()
         window = timedelta(hours=max(1, self.every_h))
+
+        def json_alone(entry: Entry) -> bool:
+            """Queue a json-only probe for a pair whose liveness is proven; False when not due."""
+            if not self.json_due(entry, json_rows, now):
+                return False
+            json_row = json_rows.get((entry.account_id, entry.key))
+            json_only.append(("" if json_row is None else str(json_row["ts"]), entry))
+            return True
+
         since = to_iso(now - window)
         skipped: dict[str, int] = {}
         due: list[tuple[str, Entry]] = []
@@ -174,7 +267,8 @@ class ModelProber:
                 continue
             row = probes.get(pair)
             if row is not None and parse_iso(row["next_due_ts"]) > now:
-                skip("not_due")
+                if not json_alone(entry):
+                    skip("not_due")
                 continue
             stats = hub.store.model_stats(entry.account_id, entry.key)
             last_ok = stats.get("last_ok_at")
@@ -187,13 +281,17 @@ class ModelProber:
                     status="deferred",
                     next_due=to_iso(parse_iso(str(last_ok)) + window),
                 )
-                skip("recently_served")
+                if not json_alone(entry):
+                    skip("recently_served")
                 continue
             order = "" if row is None else str(row["ts"])
             due.append((order, entry))
 
         due.sort(key=lambda item: item[0])
-        return [entry for _, entry in due], skipped
+        # liveness first: a pair nobody has heard from matters more than one more capability
+        json_only.sort(key=lambda item: item[0])
+        self.json_only = {(entry.account_id, entry.key) for _, entry in json_only}
+        return [entry for _, entry in due] + [entry for _, entry in json_only], skipped
 
     # --- one probe --------------------------------------------------------------------------
 
@@ -207,6 +305,45 @@ class ModelProber:
             return await asyncio.wait_for(probe_entry(self.hub, entry), timeout=PROBE_TIMEOUT_S)
         except TimeoutError:
             return {"ok": False, "status": "timeout", "error": f"no answer inside {int(PROBE_TIMEOUT_S)}s"}
+
+    async def probe_json(self, entry: Entry, now: datetime, run: ProbeRun) -> bool | None:
+        """Ask the pair for a json_schema answer and store the verdict. None: skipped or no verdict."""
+        from .api import probe_entry
+
+        hub = self.hub
+        if not hub.quota.has_room(entry, 0, JSON_PROBE_MAX_TOKENS, now):
+            run.skip("json_no_room")
+            return None
+        semaphore = hub.router.semaphore(entry)
+        if semaphore is not None and semaphore.locked():
+            run.skip("in_use")
+            return None
+        try:
+            result = await asyncio.wait_for(
+                probe_entry(hub, entry, body=json_probe_body(entry.model.id)), timeout=PROBE_TIMEOUT_S
+            )
+        except TimeoutError:
+            result = {"ok": False, "status": "timeout", "error": f"no answer inside {int(PROBE_TIMEOUT_S)}s"}
+        verdict, status = json_verdict(result)
+        later = datetime.now(UTC)
+        if verdict is None:
+            due = later + RETRY_AFTER
+        else:
+            due = later + timedelta(hours=max(1, self.json_every_h))
+        detail = str(result.get("content") or result.get("sample") or result.get("error") or "")[:200]
+        hub.store.record_learned_cap(
+            entry.account_id,
+            entry.key,
+            JSON_CAP,
+            ok=verdict,
+            status=status,
+            ts=to_iso(later),
+            next_due=to_iso(due),
+            detail=detail or None,
+        )
+        run.json_probed += 1
+        run.json_ok += 1 if verdict else 0
+        return verdict
 
     def next_due(self, entry: Entry, result: dict[str, Any], now: datetime) -> datetime:
         if result.get("ok"):
@@ -259,6 +396,7 @@ class ModelProber:
         gap = float(hub.settings.model_probe_gap_s)
         cli_cap = int(hub.settings.model_probe_cli_daily)
         refused: list[dict[str, Any]] = []
+        json_rows = hub.store.learned_caps_rows(JSON_CAP)
         index = 0
         while index < len(entries):
             if self._stopping.is_set() or budget[0] <= 0:
@@ -273,6 +411,11 @@ class ModelProber:
                     continue
             budget[0] -= 1
             now = datetime.now(UTC)
+            if (entry.account_id, entry.key) in self.json_only:
+                await self.probe_json(entry, now, run)
+                if gap > 0:
+                    await asyncio.sleep(gap)
+                continue
             result = await self.probe_one(entry, now)
             if result.get("status") == "in_use":
                 run.skip("in_use")
@@ -300,6 +443,11 @@ class ModelProber:
                     account=entry.account_id,
                 )
                 return
+            if result.get("ok") and self.json_due(entry, json_rows, now) and budget[0] > 0:
+                if gap > 0:
+                    await asyncio.sleep(gap)
+                budget[0] -= 1
+                await self.probe_json(entry, datetime.now(UTC), run)
             if gap > 0:
                 await asyncio.sleep(gap)
 
@@ -314,6 +462,7 @@ class ModelProber:
             if force:
                 disabled = self.hub.store.disabled_models()
                 entries = [e for e in self.hub.registry.entries() if self.eligible(e, now, disabled) is None]
+                self.json_only = set()
                 skipped: dict[str, int] = {}
             else:
                 entries, skipped = self.due_entries(now)
@@ -337,12 +486,13 @@ class ModelProber:
             run.finished_at = to_iso(datetime.now(UTC))
             self.last = run
             self.current = None
-            if run.probed or run.accounts_parked:
+            if run.probed or run.accounts_parked or run.json_probed:
                 self.hub.store.add_event(
                     kind="model_probe",
                     message=(
                         f"model probe: {run.probed} probed, {run.ok} ok, {run.failed} failed, "
-                        f"{sum(run.skipped.values())} skipped, {len(run.accounts_parked)} account(s) parked"
+                        f"{sum(run.skipped.values())} skipped, {len(run.accounts_parked)} account(s) parked, "
+                        f"json {run.json_ok}/{run.json_probed}"
                     ),
                 )
         return run

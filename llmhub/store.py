@@ -33,6 +33,21 @@ TABLES = (
         PRIMARY KEY (account, model)
     )
     """,
+    # what a probe taught about a pair beyond the catalog (today: `json`, a json_schema answer
+    # that parses). The newest verdict wins; a row with ok=0 adds nothing and takes nothing away
+    """
+    CREATE TABLE IF NOT EXISTS learned_caps (
+        account TEXT NOT NULL,
+        model TEXT NOT NULL,
+        cap TEXT NOT NULL,
+        ok INTEGER NOT NULL DEFAULT 0,
+        status TEXT NOT NULL,
+        detail TEXT,
+        ts TEXT NOT NULL,
+        next_due_ts TEXT NOT NULL,
+        PRIMARY KEY (account, model, cap)
+    )
+    """,
     """
     CREATE TABLE IF NOT EXISTS discovery_runs (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1462,6 +1477,60 @@ class Store:
     def model_probes_all(self) -> dict[tuple[str, str], dict[str, Any]]:
         rows = self.query("SELECT * FROM model_probes")
         return {(row["account"], row["model"]): row for row in rows}
+
+    def record_learned_cap(
+        self,
+        account: str,
+        model: str,
+        cap: str,
+        *,
+        ok: bool | None,
+        status: str,
+        ts: str,
+        next_due: str,
+        detail: str | None = None,
+    ) -> None:
+        """Store a probe's verdict on one cap. `ok=None` is no verdict: the old one stays."""
+        if ok is None:
+            self.execute(
+                """
+                INSERT INTO learned_caps (account, model, cap, ok, status, detail, ts, next_due_ts)
+                VALUES (?, ?, ?, 0, ?, ?, ?, ?)
+                ON CONFLICT(account, model, cap) DO UPDATE SET status = excluded.status,
+                    detail = excluded.detail, ts = excluded.ts, next_due_ts = excluded.next_due_ts
+                """,
+                (account, model, cap, status, detail, ts, next_due),
+            )
+            return
+        self.execute(
+            """
+            INSERT INTO learned_caps (account, model, cap, ok, status, detail, ts, next_due_ts)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(account, model, cap) DO UPDATE SET ok = excluded.ok, status = excluded.status,
+                detail = excluded.detail, ts = excluded.ts, next_due_ts = excluded.next_due_ts
+            """,
+            (account, model, cap, int(ok), status, detail, ts, next_due),
+        )
+
+    def learned_caps_rows(self, cap: str) -> dict[tuple[str, str], dict[str, Any]]:
+        rows = self.query("SELECT * FROM learned_caps WHERE cap = ?", (cap,))
+        return {(row["account"], row["model"]): row for row in rows}
+
+    def learned_caps_all(self) -> dict[tuple[str, str], set[str]]:
+        """Caps a probe proved per pair. `json` is void once the pair rejected response_format:
+        the gateway strips the param from then on, so the answer would come back as prose."""
+        rows = self.query(
+            """
+            SELECT l.account, l.model, l.cap FROM learned_caps l
+            WHERE l.ok = 1 AND NOT (l.cap = 'json' AND EXISTS (
+                SELECT 1 FROM unsupported_params u
+                WHERE u.account = l.account AND u.model = l.model AND u.param = 'response_format'))
+            """
+        )
+        grouped: dict[tuple[str, str], set[str]] = {}
+        for row in rows:
+            grouped.setdefault((row["account"], row["model"]), set()).add(row["cap"])
+        return grouped
 
     def model_probes_since(self, account: str, since: str) -> int:
         row = self.query_one(

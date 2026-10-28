@@ -1415,6 +1415,17 @@ and gets a 402 or 404. `llmhub/model_probe.py` walks every free pair with the sa
 - `POST api/health/models` starts a run in the background (`?force=true` ignores due dates);
   `GET api/health/models` reports progress and the last run. The Run Availability Sweep button
   runs the account sweep and then a forced model run.
+- `json` capability: a discovered model gets only `text` (+`vision`) from its id, so callers
+  that send `X-Hub-Require: json` saw a narrow pool. The same walk asks every pair whose catalog
+  caps lack `json` one json_schema request (`{"answer": "yes"|"no"}`, `max_tokens: 64`, a
+  question that names no format). A bare JSON object the schema accepts is the proof; it lands
+  in `learned_caps` and the router, `/v1/models` and the models view count the pair as `json`.
+  Prose, a truncated answer or a 400 is a negative verdict; quota, timeout and transport are no
+  verdict and are asked again in 30 min. A verdict stands for `LLMHUB_MODEL_PROBE_JSON_EVERY_H`
+  (168, `0` turns it off). A pair proven by traffic still gets its json probe. A negative verdict
+  never removes a catalog cap, and a learned `json` is void once the pair rejected
+  `response_format` (the gateway strips it from then on). cli and opt-in-only pairs are never
+  asked. json probes share the run budget and run as the hub's own test app.
 
 ## Health sweep - periodic proof that an idle account still works
 Real traffic answers this for the accounts it touches: a served call writes a usage row and the

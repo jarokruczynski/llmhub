@@ -633,6 +633,12 @@ class Router:
         banned = {row["model"]: row["reason"] for row in self.store.bans_for(app)} if app else {}
 
         request_caps = self.store.request_caps_all()
+        # catalog caps plus what the prober proved; a failed probe never takes a catalog cap away
+        learned_caps = self.store.learned_caps_all()
+
+        def caps_of(entry: Entry) -> set[str]:
+            return set(entry.model.caps) | learned_caps.get((entry.account_id, entry.key), set())
+
         candidates: list[Entry] = []
         rejected: list[dict[str, Any]] = []
 
@@ -661,8 +667,8 @@ class Router:
             if alias is not None and entry.opt_in_only and entry.key not in alias_named:
                 reject(entry, "opt_in_only", alias)
                 continue
-            if required_caps and not set(required_caps).issubset(set(entry.model.caps)):
-                reject(entry, "capability", ",".join(sorted(set(required_caps) - set(entry.model.caps))))
+            if required_caps and not set(required_caps).issubset(caps_of(entry)):
+                reject(entry, "capability", ",".join(sorted(set(required_caps) - caps_of(entry))))
                 continue
             if min_context is not None:
                 # an undeclared context is rejected, not assumed wide enough: the caller asked
@@ -737,7 +743,7 @@ class Router:
 
         def penalty(entry: Entry) -> int:
             """How far a soft preference pushes this entry down. Never removes it from the pool."""
-            score = 1 if avoided.intersection(entry.model.caps) else 0
+            score = 1 if avoided.intersection(caps_of(entry)) else 0
             measured = latency.get((entry.account_id, entry.key))
             if max_latency_ms is not None and measured is not None and measured > max_latency_ms:
                 score += 1

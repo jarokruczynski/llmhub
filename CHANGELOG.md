@@ -12,6 +12,10 @@ for the record but have no tags: those commits are not part of this repository.
 
 ### Added
 
+- Model prober learns the `json` capability: pairs whose catalog caps lack `json` get one small
+  json_schema request, and a schema-valid answer makes the router and `/v1/models` count the
+  pair as `json` (`learned_caps` table, `LLMHUB_MODEL_PROBE_JSON_EVERY_H`, default 168 h).
+
 - Events Log rebuilt as an interactive activity log: every attempt (model, app, account,
   duration, tokens in/out/cached, tok/s, status, attempt number) and every event on one
   timeline, from the new `GET api/activity`. Time range chips, kind/app/model filters and

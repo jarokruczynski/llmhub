@@ -142,6 +142,7 @@ def model_rows(
     observed_all = hub.store.observed_limits_all()
     request_caps_all = hub.store.request_caps_all()
     unsupported_params_all = hub.store.unsupported_params_all()
+    learned_caps_all = hub.store.learned_caps_all()
     unavailable_all = hub.store.unavailable_all(now)
     rows: list[dict[str, Any]] = []
     for entry in hub.registry.entries():
@@ -165,7 +166,9 @@ def model_rows(
                 "account": entry.account_id,
                 "model": entry.model.id,
                 "kind": entry.kind,
-                "caps": list(entry.model.caps),
+                "caps": list(dict.fromkeys([*entry.model.caps, *sorted(learned_caps_all.get(pair, set()))])),
+                # caps proved by a probe rather than written in the catalog
+                "learned_caps": sorted(learned_caps_all.get(pair, set()) - set(entry.model.caps)),
                 "context": entry.model.context,
                 "max_request_tokens": entry.model.max_request_tokens,
                 "observed_request_cap": request_caps_all.get(pair, {}).get("max_request_tokens"),

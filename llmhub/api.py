@@ -1210,21 +1210,25 @@ def vendor_body(raw: Any) -> Any:
         return raw[:2000]
 
 
-async def probe_entry(hub: Hub, entry: Any, prompt: str = "ping") -> dict[str, Any]:
+async def probe_entry(
+    hub: Hub, entry: Any, prompt: str = "ping", body: dict[str, Any] | None = None
+) -> dict[str, Any]:
     """One `max_tokens: 1` call through the normal gateway path, no retry ladder.
 
     Returns the result shape of the test endpoint minus the provider/account fields, so quick
     add and the per-account test button run the exact same code. A cli backend ignores
     max_tokens and answers a bare "ping" with a question, so it gets an instruction instead.
+    `body` replaces the ping request whole (the json capability probe sends its own).
     """
     hub.store.ensure_app(TEST_APP)
     if entry.kind == CLI_KIND and prompt == "ping":
         prompt = PROBE_PROMPT
-    body = {
-        "model": entry.model.id,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 1,
-    }
+    if body is None:
+        body = {
+            "model": entry.model.id,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 1,
+        }
     # a throwaway router: same store/quota/cooldowns, but one candidate and no retry backoff,
     # so a click on "test" cannot sit for a minute waiting out the retry ladder
     probe = Router(
@@ -1300,9 +1304,10 @@ async def probe_entry(hub: Hub, entry: Any, prompt: str = "ping") -> dict[str, A
     call_result = result.result
     payload_json = call_result.payload or {}
     choices = payload_json.get("choices") or []
-    sample = ""
+    content = ""
     if choices and isinstance(choices[0], dict):
-        sample = str((choices[0].get("message") or {}).get("content") or "")[:200]
+        content = str((choices[0].get("message") or {}).get("content") or "")
+    sample = content[:200]
     return {
         "ok": True,
         "status": "ok",
@@ -1312,6 +1317,7 @@ async def probe_entry(hub: Hub, entry: Any, prompt: str = "ping") -> dict[str, A
         "attempt_count": len(result.attempts),
         "usage": payload_json.get("usage"),
         "sample": sample,
+        "content": content,
     }
 
 

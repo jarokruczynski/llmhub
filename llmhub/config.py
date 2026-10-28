@@ -420,6 +420,9 @@ class Settings:
     model_probe_cli_daily: int = 5
     # how long an account stays parked once its key or wallet is refused on several models
     model_probe_account_ttl_s: int = 6 * 3600
+    # hours a json capability verdict stands before the pair is asked again; 0 turns the json
+    # probe off. Only pairs whose catalog caps lack `json` are asked.
+    model_probe_json_every_h: int = 7 * 24
     # hours between two model discovery passes (each provider's own listing diffed against the
     # registry); one also runs at start. 0 turns the schedule off.
     discovery_every_h: int = 6
@@ -469,6 +472,7 @@ class Settings:
             model_probe_parallel=_positive_int(env, "LLMHUB_MODEL_PROBE_PARALLEL", 4),
             model_probe_max_per_run=_positive_int(env, "LLMHUB_MODEL_PROBE_MAX_PER_RUN", 150),
             model_probe_cli_daily=_non_negative_int(env, "LLMHUB_MODEL_PROBE_CLI_DAILY", 5),
+            model_probe_json_every_h=_non_negative_int(env, "LLMHUB_MODEL_PROBE_JSON_EVERY_H", 7 * 24),
             discovery_every_h=_non_negative_int(env, "LLMHUB_DISCOVERY_EVERY_H", 6),
             hub_base_url=env.get("LLMHUB_BASE_URL", "http://127.0.0.1:8800/v1").rstrip("/"),
             scout_at=scout_at or None,
